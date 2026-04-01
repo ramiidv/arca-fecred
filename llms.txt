@@ -1,0 +1,173 @@
+# @ramiidv/arca-fecred
+
+> TypeScript SDK para el web service WSFECRED de ARCA (ex AFIP) - Factura de Credito Electronica MiPyME (Ley 27440)
+
+## Instalacion
+
+```bash
+npm install @ramiidv/arca-fecred
+```
+
+Requisitos: Node.js >= 18 (fetch nativo). ESM only.
+
+## Configuracion
+
+```typescript
+import { ArcaFecred } from '@ramiidv/arca-fecred';
+
+const fecred = new ArcaFecred({
+  cert: string,          // PEM X.509 certificate
+  key: string,           // PEM RSA private key
+  cuit: string,          // CUIT representada (ej: "20123456789")
+  production?: boolean,  // default: false (homologacion)
+  timeout?: number,      // default: 30000
+  retries?: number,      // default: 1
+  retryDelayMs?: number, // default: 1000
+  onEvent?: (event: ArcaEvent) => void,
+});
+```
+
+## Metodos principales
+
+### consultarMontoObligadoRecepcion(cuit: string): Promise<MontoObligadoResult>
+Verifica si una CUIT esta obligada a recibir FCE. Retorna: { cuitConsultada, obligado: boolean, montoDesde?: number, raw }.
+
+### consultarCtasCtes(params: ConsultarCtasCtesParams): Promise<CtaCte[]>
+Consulta cuentas corrientes de actividad FCE. Params: { rol: "Emisor"|"Receptor", cuitEmisor?, cuitReceptor?, fechaDesde, fechaHasta }. Retorna array de CtaCte.
+
+### consultarComprobantes(params: ConsultarComprobantesParams): Promise<ComprobanteFecred[]>
+Busca comprobantes FCE. Params: { cuitEmisor?, cuitReceptor?, codCtaCte?, fechaDesde?, fechaHasta? }. Retorna array de ComprobanteFecred.
+
+### aceptarFECred(codCtaCte: number): Promise<AceptarFecredResult>
+Acepta una FCE. Retorna: { codCtaCte, resultado, raw }.
+
+### rechazarFECred(codCtaCte: number, codMotivoRechazo: number): Promise<RechazarFecredResult>
+Rechaza una FCE. Usar MotivoRechazo enum para codMotivoRechazo. Retorna: { codCtaCte, resultado, raw }.
+
+### informarFacturaAceptadaCancelada(params: InformarCanceladaParams): Promise<InformarCanceladaResult>
+Informa que una FCE aceptada fue pagada. Params: { codCtaCte, codFormaCancelacion, observaciones? }. Usar FormaCancelacion enum.
+
+### consultarTiposRetenciones(): Promise<TipoRetencionItem[]>
+Tipos de retenciones disponibles. Retorna: { codTipoRetencion, descTipoRetencion }[].
+
+### consultarTiposFormasCancelacion(): Promise<TipoFormaCancelacionItem[]>
+Formas de cancelacion disponibles. Retorna: { codFormaCancelacion, descFormaCancelacion }[].
+
+### consultarTiposAjustesOperacion(): Promise<TipoAjusteOperacionItem[]>
+Tipos de ajustes de operacion. Retorna: { codTipoAjuste, descTipoAjuste }[].
+
+### consultarTiposMotivoRechazo(): Promise<TipoMotivoRechazoItem[]>
+Motivos de rechazo disponibles. Retorna: { codMotivoRechazo, descMotivoRechazo }[].
+
+### status(): Promise<ServerStatus>
+Health check. No requiere autenticacion. Retorna: { appserver, dbserver, authserver }.
+
+### clearAuthCache(): void
+Invalida el ticket de acceso cacheado para WSFECRED.
+
+## Tipos principales
+
+```typescript
+interface CtaCte {
+  codCtaCte: number;
+  cuitEmisor: string;
+  denominacionEmisor?: string;
+  cuitReceptor: string;
+  denominacionReceptor?: string;
+  tipoComprobante?: number;
+  puntoVenta?: number;
+  nroComprobante?: number;
+  codMoneda?: string;
+  importeTotal?: number;
+  saldo?: number;
+  estado?: string;
+  fechaEmision?: string;
+  fechaVencimientoPago?: string;
+  fechaVencimientoAceptacion?: string;
+  cae?: string;
+}
+
+interface ComprobanteFecred {
+  codCtaCte: number;
+  tipoComprobante?: number;
+  puntoVenta?: number;
+  nroComprobante?: number;
+  cuitEmisor: string;
+  cuitReceptor: string;
+  codMoneda?: string;
+  importeTotal?: number;
+  importeNeto?: number;
+  saldo?: number;
+  estado?: string;
+  fechaEmision?: string;
+  fechaVencimientoPago?: string;
+  cae?: string;
+  retenciones?: RetencionFecred[];
+}
+
+interface MontoObligadoResult {
+  cuitConsultada: string;
+  obligado: boolean;
+  montoDesde?: number;
+  raw: Record<string, unknown>;
+}
+
+interface ServerStatus {
+  appserver: string;
+  dbserver: string;
+  authserver: string;
+}
+```
+
+## Errores
+
+3-class hierarchy from @ramiidv/arca-common:
+- ArcaError: base class
+- ArcaAuthError: WSAA authentication failures
+- ArcaServiceError: business errors from WSFECRED (has errors: {code: number, msg: string}[])
+- ArcaSoapError: HTTP/transport errors (has statusCode?: number)
+
+```typescript
+import { ArcaAuthError, ArcaServiceError, ArcaSoapError } from '@ramiidv/arca-fecred';
+
+try {
+  await fecred.aceptarFECred(codCtaCte);
+} catch (error) {
+  if (error instanceof ArcaAuthError) { /* auth failure */ }
+  if (error instanceof ArcaServiceError) { /* business error, check error.errors */ }
+  if (error instanceof ArcaSoapError) { /* HTTP/network error, check error.statusCode */ }
+}
+```
+
+## Eventos
+
+Discriminated union types: auth:login, auth:cache-hit, request:start, request:end, request:retry, request:error.
+
+## Enums
+
+- RolCtaCte (EMISOR="Emisor", RECEPTOR="Receptor")
+- EstadoCtaCte (PENDIENTE_ACEPTACION, ACEPTADA, RECHAZADA, CANCELADA, ANULADA)
+- MotivoRechazo (NOTA_CREDITO_DEBITO=1, CUIT_INCORRECTO=2, FECHA_INCORRECTA=3, CBU_INCORRECTO=4, OTROS=5)
+- FormaCancelacion (ACREDITACION_CUENTA=1, TRANSFERENCIA=2, CHEQUE=3, PAGO_ELECTRONICO=4, COMPENSACION=5, ENDOSO=6, OTRO=99)
+- TipoAjusteOperacion (NOTA_CREDITO=1, NOTA_DEBITO=2)
+- TipoRetencion (GANANCIAS=1, IVA=2, SUSS=3, INGRESOS_BRUTOS=4, OTRAS=99)
+
+## Clientes de bajo nivel
+
+Accesibles como propiedades publicas: fecred.wsaa, fecred.fecred.
+
+## SOAP details
+
+- WSAA service ID: "wsfecred"
+- Production endpoint: https://serviciosjava.afip.gob.ar/wsfecred/FECredService
+- Homologation endpoint: https://fwshomo.afip.gob.ar/wsfecred/FECredService
+- Namespace: https://serviciosjava.afip.gob.ar/wsfecred/FECredService?wsdl
+- Uses ser: prefix (Java-based, like padron services)
+- Auth passed as authRequest: { Token, Sign, Cuit }
+
+## Utilidades re-exportadas de arca-common
+
+- ensureArray<T>(value): T[] - normaliza single/array SOAP responses
+- parseXml(xml): Record<string, unknown> - parse XML
+- buildXml(obj): string - build XML from object
+- checkServiceErrors(result, serviceName): void - throws ArcaServiceError if errors found
