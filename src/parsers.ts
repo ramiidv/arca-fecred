@@ -99,20 +99,11 @@ function items(o: Obj, container: string, item: string, path: string): Obj[] {
 
 /**
  * Lanza ArcaServiceError si la respuesta trae `arrayErrores` o
- * `arrayErroresFormato`. `arrayErroresFormato` usa ítems
- * `codigoDescripcionString` (ArrayCodigosDescripcionesStringType), que
- * `checkServiceErrors` de common no reconoce: se renombran antes de chequear.
+ * `arrayErroresFormato` (este último con ítems `codigoDescripcionString`,
+ * que `checkServiceErrors` de common reconoce).
  */
 export function checkFecredErrors(result: Obj): void {
-  checkServiceErrors(normalizeErrors(result), SERVICE);
-}
-
-function normalizeErrors(result: Obj): Obj {
-  const formato = result['arrayErroresFormato'];
-  if (formato === null || typeof formato !== 'object' || Array.isArray(formato)) return result;
-  const f = formato as Obj;
-  if (!('codigoDescripcionString' in f)) return result;
-  return { ...result, arrayErroresFormato: { codigoDescripcion: f['codigoDescripcionString'] } };
+  checkServiceErrors(result, SERVICE);
 }
 
 /**
@@ -122,7 +113,7 @@ function normalizeErrors(result: Obj): Obj {
 export function resultadoAprobado(r: Obj, path: string): 'A' | 'O' {
   const resultado = enumValue(r, 'resultado', path, Resultado);
   if (resultado === 'R') {
-    const errors = extractServiceErrors(normalizeErrors(r));
+    const errors = extractServiceErrors(r);
     const obs = parseInfo(r, path).observaciones.map((o) => ({ code: o.codigo, msg: o.descripcion }));
     const details = [...errors, ...obs];
     throw new ArcaServiceError(
