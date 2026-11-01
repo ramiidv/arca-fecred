@@ -1,265 +1,511 @@
-// Shared types from common
-export type { AccessTicket, ArcaEvent, ServerStatus, SoapCallOptions } from '@ramiidv/arca-common';
-import type { ArcaEvent } from '@ramiidv/arca-common';
+import type { ArcaBaseConfig, WsaaClient } from '@ramiidv/arca-common';
+import type {
+  EstadoComprobante,
+  EstadoCtaCte,
+  OpcionTransferencia,
+  Resultado,
+  RolCtaCte,
+  TipoAceptacion,
+  TipoCancelacion,
+  TipoCodAutorizacion,
+  TipoFechaFiltro,
+} from './constants.js';
+
+// Los nombres de campos siguen el XSD de FECredService (WSDL de homologación).
+// Convenciones de las respuestas:
+// - CUITs, `codCtaCte` y `codAutorizacion` (xsd:long) se devuelven como string de dígitos.
+// - Fechas (`xsd:date`/`xsd:dateTime`) se devuelven como el string que envía ARCA.
+// - Importes (`xsd:decimal`) se devuelven como number.
+// - `SiNoSimpleType` (`S`/`N`) se convierte a boolean.
 
 // ---------------------------------------------------------------------------
-// Configuration
+// Configuración
 // ---------------------------------------------------------------------------
 
-export interface ArcaFecredConfig {
-  /** PEM-encoded X.509 certificate */
-  cert: string;
-  /** PEM-encoded RSA private key */
-  key: string;
-  /** CUIT of the entity represented (e.g. "20123456789") */
-  cuit: string;
-  /** Use production endpoints (default: false = testing / homologacion) */
-  production?: boolean;
-  /** Request timeout in ms (default: 30000) */
-  timeout?: number;
-  /** Number of retries on 5xx / network errors (default: 1) */
-  retries?: number;
-  /** Base delay in ms for exponential backoff (default: 1000) */
-  retryDelayMs?: number;
-  /** Optional event callback */
-  onEvent?: (event: ArcaEvent) => void;
+export interface ArcaFecredConfig extends ArcaBaseConfig {
+  /**
+   * `WsaaClient` propio (por ejemplo, para compartir tickets con otros SDKs).
+   * Si se pasa, se ignoran las opciones de WSAA de esta config.
+   */
+  wsaa?: WsaaClient;
+  /** Sobrescribe los endpoints (por defecto, según `production`). */
+  endpoints?: {
+    /** URL de FECredService. */
+    wsfecred?: string;
+    /** URL de WSAA (LoginCms). */
+    wsaa?: string;
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Authentication
-// ---------------------------------------------------------------------------
-
+/** `AuthRequestType`. */
 export interface WsAuth {
-  Token: string;
-  Sign: string;
-  Cuit: string;
+  token: string;
+  sign: string;
+  /** CUIT representada (11 dígitos). */
+  cuitRepresentada: string;
 }
 
 // ---------------------------------------------------------------------------
-// Monto obligado recepcion
+// Tipos comunes
 // ---------------------------------------------------------------------------
 
-export interface MontoObligadoResult {
-  /** CUIT consultada */
-  cuitConsultada: string;
-  /** Si la CUIT esta obligada a recibir FCE */
+/** `CodigoDescripcionType`. */
+export interface CodigoDescripcion {
+  codigo: number;
+  descripcion: string;
+}
+
+/** `IdComprobanteType` en las respuestas. */
+export interface IdComprobante {
+  cuitEmisor: string;
+  codTipoCmp: number;
+  ptoVta: number;
+  nroCmp: number;
+}
+
+/** `IdComprobanteType` en los requests. */
+export interface IdComprobanteInput {
+  /** CUIT del emisor del comprobante (con o sin guiones). */
+  cuitEmisor: number | string;
+  codTipoCmp: number;
+  ptoVta: number;
+  nroCmp: number;
+}
+
+/**
+ * `IdCtaCteType` (xsd:choice) en los requests: el código de cuenta corriente
+ * o la identificación de la factura.
+ */
+export type IdCtaCteInput =
+  | { codCtaCte: number | string; idFactura?: never }
+  | { idFactura: IdComprobanteInput; codCtaCte?: never };
+
+/** `IdCtaCteType` en las respuestas (viene uno de los dos). */
+export interface IdCtaCte {
+  codCtaCte?: string;
+  idFactura?: IdComprobante;
+}
+
+/** `FiltroFechaType`. Las fechas se aceptan como `Date`, `YYYY-MM-DD` o `YYYYMMDD`. */
+export interface FiltroFecha {
+  tipo: TipoFechaFiltro;
+  desde: Date | string;
+  hasta: Date | string;
+}
+
+/** Datos informativos comunes a las respuestas (`evento`, `arrayObservaciones`). */
+export interface InfoRespuesta {
+  /** `evento`: aviso informativo de ARCA, si lo hay. */
+  evento?: CodigoDescripcion;
+  /** `arrayObservaciones` / `arrayObservacion`. Vacío si no hay. */
+  observaciones: CodigoDescripcion[];
+}
+
+/** `EstadoCtaCteType`. */
+export interface EstadoCtaCteInfo {
+  estado: EstadoCtaCte;
+  fechaHoraEstado: string;
+}
+
+/** `EstadoCmpType`. */
+export interface EstadoComprobanteInfo {
+  estado: EstadoComprobante;
+  fechaHoraEstado: string;
+}
+
+// ---------------------------------------------------------------------------
+// Obligación de recepción
+// ---------------------------------------------------------------------------
+
+export interface ConsultarMontoObligadoRecepcionParams {
+  /** CUIT a consultar (con o sin guiones). */
+  cuitConsultada: number | string;
+  /** Fecha de emisión del comprobante a emitir. */
+  fechaEmision: Date | string;
+}
+
+/** `consultarMontoObligadoRecepcionReturn`. */
+export interface MontoObligadoRecepcionResult extends InfoRespuesta {
+  /** `obligado` (S/N). */
   obligado: boolean;
-  /** Monto desde el cual esta obligada (si aplica) */
+  /** `montoDesde`: monto a partir del cual es obligatoria la FCE, si ARCA lo informa. */
   montoDesde?: number;
-  /** Respuesta cruda del WS */
-  raw: Record<string, unknown>;
+}
+
+/** `consultarObligadoRecepcionReturn`. */
+export interface ObligadoRecepcionResult extends InfoRespuesta {
+  /** `respuesta` (S/N). */
+  obligado: boolean;
+  /** `desde`: fecha desde la cual está obligada, si ARCA la informa. */
+  desde?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Cuenta corriente
+// Cuentas corrientes
 // ---------------------------------------------------------------------------
 
-export interface CtaCte {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** CUIT del emisor */
-  cuitEmisor: string;
-  /** Denominacion del emisor */
-  denominacionEmisor?: string;
-  /** CUIT del receptor */
-  cuitReceptor: string;
-  /** Denominacion del receptor */
-  denominacionReceptor?: string;
-  /** Tipo de comprobante */
-  tipoComprobante?: number;
-  /** Punto de venta */
-  puntoVenta?: number;
-  /** Numero de comprobante */
-  nroComprobante?: number;
-  /** Codigo de moneda */
-  codMoneda?: string;
-  /** Importe total */
-  importeTotal?: number;
-  /** Saldo actual */
-  saldo?: number;
-  /** Estado de la cuenta corriente */
-  estado?: string;
-  /** Fecha de emision */
-  fechaEmision?: string;
-  /** Fecha de vencimiento del pago */
-  fechaVencimientoPago?: string;
-  /** Fecha de vencimiento de aceptacion */
-  fechaVencimientoAceptacion?: string;
-  /** CAE del comprobante */
-  cae?: string;
-  /** Respuesta cruda */
-  raw?: Record<string, unknown>;
-}
-
-/** Parametros para consultar cuentas corrientes */
 export interface ConsultarCtasCtesParams {
-  /** Rol: "Emisor" o "Receptor" */
-  rol: string;
-  /** CUIT del emisor (requerido si rol = "Receptor") */
-  cuitEmisor?: string;
-  /** CUIT del receptor (requerido si rol = "Emisor") */
-  cuitReceptor?: string;
-  /** Fecha desde (formato YYYY-MM-DD) */
-  fechaDesde: string;
-  /** Fecha hasta (formato YYYY-MM-DD) */
-  fechaHasta: string;
+  /** `rolCUITRepresentada`. */
+  rol: RolCtaCte;
+  /** `CUITContraparte`. */
+  cuitContraparte?: number | string;
+  fecha?: FiltroFecha;
+  estadoCtaCte?: EstadoCtaCte;
+  nroPagina?: number;
+  opcionTransferencia?: OpcionTransferencia;
+}
+
+/** `InfoCtaCteType`. */
+export interface InfoCtaCte {
+  codCtaCte: string;
+  estadoCtaCte: EstadoCtaCteInfo;
+  idFacturaCredito: IdComprobante;
+  importeTotalFC: number;
+  saldo: number;
+  saldoAceptado?: number;
+  codMoneda: string;
+  opcionTransferencia: OpcionTransferencia;
+}
+
+/** Resultado paginado de `consultarCtasCtes`. */
+export interface ConsultarCtasCtesResult extends InfoRespuesta {
+  ctasCtes: InfoCtaCte[];
+  nroPagina?: number;
+  /** `hayMas` (S/N): hay más páginas. `undefined` si ARCA no lo informa. */
+  hayMas?: boolean;
+}
+
+/** `RetencionType`. */
+export interface Retencion {
+  codTipo: number;
+  importe: number;
+  porcentaje: number;
+  descMotivo?: string;
+}
+
+/** `AjusteOperacionType`. */
+export interface AjusteOperacion {
+  codigo: number;
+  importe: number;
+}
+
+/** `CuentaCorrienteType`. */
+export interface CuentaCorriente {
+  codCtaCte: string;
+  estadoCtaCte: EstadoCtaCteInfo;
+  factura: Comprobante;
+  notasDCAsociadas: Comprobante[];
+  formasCancelacion: CodigoDescripcion[];
+  retenciones: Retencion[];
+  ajustesOperacion: AjusteOperacion[];
+  importeInicial: number;
+  importeTotalNotasDC?: number;
+  importeCancelado?: number;
+  importeTotalRetPesos?: number;
+  importeEmbargoPesos?: number;
+  saldoAceptado?: number;
+  saldo: number;
+  codMoneda: string;
+  cotizacionMonedaUlt: number;
+}
+
+export interface ConsultarCtaCteResult extends InfoRespuesta {
+  ctaCte: CuentaCorriente;
+}
+
+export interface HistorialEstadosCtaCteResult {
+  idCtaCte: IdCtaCte;
+  estados: EstadoCtaCteInfo[];
 }
 
 // ---------------------------------------------------------------------------
-// Comprobantes FCE
+// Comprobantes
 // ---------------------------------------------------------------------------
 
-export interface ComprobanteFecred {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** Tipo de comprobante */
-  tipoComprobante?: number;
-  /** Punto de venta */
-  puntoVenta?: number;
-  /** Numero de comprobante */
-  nroComprobante?: number;
-  /** CUIT del emisor */
-  cuitEmisor: string;
-  /** Denominacion del emisor */
-  denominacionEmisor?: string;
-  /** CUIT del receptor */
-  cuitReceptor: string;
-  /** Denominacion del receptor */
-  denominacionReceptor?: string;
-  /** Codigo de moneda */
-  codMoneda?: string;
-  /** Importe total */
-  importeTotal?: number;
-  /** Importe neto */
-  importeNeto?: number;
-  /** Saldo */
-  saldo?: number;
-  /** Estado */
-  estado?: string;
-  /** Fecha de emision */
-  fechaEmision?: string;
-  /** Fecha de vencimiento del pago */
-  fechaVencimientoPago?: string;
-  /** CAE */
-  cae?: string;
-  /** Retenciones aplicadas */
-  retenciones?: RetencionFecred[];
-  /** Respuesta cruda */
-  raw?: Record<string, unknown>;
-}
-
-/** Parametros para consultar comprobantes */
 export interface ConsultarComprobantesParams {
-  /** CUIT del emisor */
-  cuitEmisor?: string;
-  /** CUIT del receptor */
-  cuitReceptor?: string;
-  /** Codigo de cuenta corriente (para consultar un comprobante especifico) */
-  codCtaCte?: number;
-  /** Fecha desde (formato YYYY-MM-DD) */
-  fechaDesde?: string;
-  /** Fecha hasta (formato YYYY-MM-DD) */
-  fechaHasta?: string;
+  /** `rolCUITRepresentada`. */
+  rol: RolCtaCte;
+  /** `CUITContraparte`. */
+  cuitContraparte?: number | string;
+  codTipoCmp?: number;
+  estadoCmp?: EstadoComprobante;
+  fecha?: FiltroFecha;
+  codCtaCte?: number | string;
+  estadoCtaCte?: EstadoCtaCte;
+  nroPagina?: number;
+}
+
+/** `SubtotalIVAType`. */
+export interface SubtotalIva {
+  codigo: number;
+  baseImponible: number;
+  importe: number;
+}
+
+/** `OtroTributoType`. */
+export interface OtroTributo {
+  codigo: number;
+  detalle?: string;
+  baseImponible: number;
+  importe: number;
+}
+
+/** `ItemType`. */
+export interface ItemComprobante {
+  orden: number;
+  unidadesMtx?: number;
+  codigoMtx?: string;
+  codigo?: string;
+  descripcion: string;
+  codNomMercosur?: string;
+  cantidad?: number;
+  codigoUnidadMedida?: number;
+  precioUnitario?: number;
+  importeBonificacion?: number;
+  codigoCondicionIVA: number;
+  importeIVA?: number;
+  importeItem: number;
+}
+
+/** `MotivoRechazoType`. */
+export interface MotivoRechazo {
+  /** Código de `consultarTiposMotivosRechazo`. */
+  codMotivo: number;
+  /** Descripción del motivo (3 a 250 caracteres). */
+  descMotivo: string;
+  /** Justificación (3 a 250 caracteres). */
+  justificacion: string;
+}
+
+/** `CuentaEnAgenteType`. */
+export interface CuentaEnAgente {
+  cuitAgente: string;
+  razonSocialAgente?: string;
+  idCuenta: string;
+  denominacion?: string;
+}
+
+/** `CuentaEnAgenteType` en los requests. */
+export interface CuentaEnAgenteInput {
+  cuitAgente: number | string;
+  razonSocialAgente?: string;
+  /** 3 a 20 caracteres. */
+  idCuenta: string;
+  /** 3 a 250 caracteres. */
+  denominacion?: string;
+}
+
+/** `InfoAgtDptoCltvType`. */
+export interface InfoAgtDptoCltv {
+  fechaInfo: string;
+  ctaAgente: CuentaEnAgente;
+  recibida: boolean;
+  fechaLectura?: string;
+  fechaRecep?: string;
+  aceptada?: boolean;
+  motivoRechazo?: string;
+  idPagoAgtDptoCltv?: string;
+  cbuAgtDptoCltv?: string;
+}
+
+/** `InfoSCAType`. */
+export interface InfoSca {
+  fechaAceptacionFactura: string;
+  informaCBUReceptor: boolean;
+  cbuReceptor?: string;
+  cbuValidada?: boolean;
+  fechaLecturaSCA?: string;
+}
+
+/** `InfoTransferenciaType` (xsd:choice): viene uno de los dos. */
+export interface InfoTransferencia {
+  infoAgtDptoCltv?: InfoAgtDptoCltv;
+  infoSCA?: InfoSca;
+}
+
+/** `ComprobanteType`. */
+export interface Comprobante {
+  cuitEmisor: string;
+  razonSocialEmi: string;
+  codTipoCmp: number;
+  ptoVta: number;
+  nroCmp: number;
+  cuitReceptor: string;
+  razonSocialRecep: string;
+  tipoCodAuto: TipoCodAutorizacion;
+  /** CAE / CAEA. */
+  codAutorizacion: string;
+  fechaEmision: string;
+  fechaPuestaDispo?: string;
+  fechaVenPago?: string;
+  fechaVenAcep?: string;
+  importeTotal: number;
+  codMoneda: string;
+  cotizacionMoneda: number;
+  cbuEmisor?: string;
+  aliasEmisor?: string;
+  esAnulacion?: boolean;
+  esPostAceptacion?: boolean;
+  idComprobanteAsociado?: IdComprobante;
+  referenciasComerciales: string[];
+  subtotalesIVA: SubtotalIva[];
+  otrosTributos: OtroTributo[];
+  items: ItemComprobante[];
+  datosGenerales?: string;
+  datosComerciales?: string;
+  leyendaComercial?: string;
+  codCtaCte: string;
+  estado: EstadoComprobanteInfo;
+  tipoAcep?: TipoAceptacion;
+  fechaHoraAcep?: string;
+  motivosRechazo: MotivoRechazo[];
+  opcionTransferencia?: OpcionTransferencia;
+  infoTransferencia?: InfoTransferencia;
+}
+
+/** Resultado paginado de `consultarComprobantes`. */
+export interface ConsultarComprobantesResult extends InfoRespuesta {
+  comprobantes: Comprobante[];
+  nroPagina?: number;
+  hayMas?: boolean;
+}
+
+export interface HistorialEstadosComprobanteResult {
+  idComprobante: IdComprobante;
+  estados: EstadoComprobanteInfo[];
 }
 
 // ---------------------------------------------------------------------------
-// Aceptar / Rechazar
+// Operaciones (emisiones)
 // ---------------------------------------------------------------------------
 
-/** Resultado de aceptar una FCE */
-export interface AceptarFecredResult {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** Resultado de la operacion */
-  resultado: string;
-  /** Respuesta cruda del WS */
-  raw: Record<string, unknown>;
+/**
+ * `OperacionFECredReturnType`. Solo se devuelve con `resultado` `A` u `O`: un
+ * resultado `R` o cualquier error de ARCA se lanza como `ArcaServiceError`.
+ */
+export interface OperacionFecredResult extends InfoRespuesta {
+  resultado: Exclude<Resultado, 'R'>;
+  idCtaCte: IdCtaCte;
 }
 
-/** Resultado de rechazar una FCE */
-export interface RechazarFecredResult {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** Resultado de la operacion */
-  resultado: string;
-  /** Respuesta cruda del WS */
-  raw: Record<string, unknown>;
+/** `rechazarNotaDCReturn` (mismas reglas que `OperacionFecredResult`). */
+export interface RechazarNotaDCResult extends InfoRespuesta {
+  resultado: Exclude<Resultado, 'R'>;
+  idComprobante: IdComprobante;
+}
+
+/** Forma de cancelación (`CodigoDescripcionType`) para los requests. */
+export interface FormaCancelacionInput {
+  /** Código de `consultarTiposFormasCancelacion`. */
+  codigo: number;
+  descripcion: string;
+}
+
+/** `RetencionType` para los requests. */
+export interface RetencionInput {
+  /** Código de tipo de retención. */
+  codTipo: number;
+  importe: number;
+  /** 0 a 100. */
+  porcentaje: number;
+  /** 3 a 250 caracteres. */
+  descMotivo?: string;
+}
+
+/** `ConfirmarNotaDCType`. */
+export interface ConfirmarNotaDCInput {
+  acepta: boolean;
+  idNota: IdComprobanteInput;
+}
+
+/** `AceptarFECredRequestType` (sin `authRequest`). */
+export interface AceptarFecredParams {
+  idCtaCte: IdCtaCteInput;
+  /** `arrayConfirmarNotasDC`. */
+  confirmarNotasDC?: ConfirmarNotaDCInput[];
+  /** `arrayFormasCancelacion`. */
+  formasCancelacion?: FormaCancelacionInput[];
+  /** `arrayRetenciones`. */
+  retenciones?: RetencionInput[];
+  /** `arrayAjustesOperacion` (códigos de `consultarTiposAjustesOperacion`). */
+  ajustesOperacion?: AjusteOperacion[];
+  tipoCancelacion?: TipoCancelacion;
+  importeCancelado?: number;
+  importeTotalRetPesos?: number;
+  importeEmbargoPesos?: number;
+  saldoAceptado: number;
+  codMoneda: string;
+  cotizacionMonedaUlt: number;
+  informaCBU?: boolean;
+  /** `CBUComprador` (22 dígitos). */
+  cbuComprador?: string;
+}
+
+/** `RechazarFECredRequestType` (sin `authRequest`). */
+export interface RechazarFecredParams {
+  idCtaCte: IdCtaCteInput;
+  /** `arrayMotivosRechazo` (al menos uno). */
+  motivos: MotivoRechazo[];
+}
+
+/** `RechazarNotaDCRequestType` (sin `authRequest`). */
+export interface RechazarNotaDCParams {
+  idComprobante: IdComprobanteInput;
+  /** `arrayMotivosRechazo` (al menos uno). */
+  motivos: MotivoRechazo[];
+}
+
+/** `InformarCancelacionTotalFECredRequestType` (sin `authRequest`). */
+export interface InformarCancelacionTotalParams {
+  idCtaCte: IdCtaCteInput;
+  /** `arrayFormasCancelacion` (al menos una). */
+  formasCancelacion: FormaCancelacionInput[];
+  importeCancelacion: number;
+}
+
+/** `ModificarOpcionTransferenciaRequestType` (sin `authRequest`). */
+export interface ModificarOpcionTransferenciaParams {
+  idCtaCte: IdCtaCteInput;
+  opcionTransferencia: OpcionTransferencia;
+}
+
+/** `InformarFacturaAgtDptoCltvRequestType` (sin `authRequest`). */
+export interface InformarFacturaAgtDptoCltvParams {
+  idCtaCte: IdCtaCteInput;
+  ctaAgente: CuentaEnAgenteInput;
 }
 
 // ---------------------------------------------------------------------------
-// Informar FCE aceptada cancelada
+// Agente de Depósito Colectivo
 // ---------------------------------------------------------------------------
 
-export interface InformarCanceladaParams {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** Codigo de forma de cancelacion */
-  codFormaCancelacion: number;
-  /** Observaciones opcionales */
-  observaciones?: string;
+export interface ConsultarFacturasAgtDptoCltvParams {
+  idCtaCte?: IdCtaCteInput;
+  /** `filtroFecha`. */
+  fecha?: FiltroFecha;
 }
 
-export interface InformarCanceladaResult {
-  /** Codigo de cuenta corriente */
-  codCtaCte: number;
-  /** Resultado de la operacion */
-  resultado: string;
-  /** Respuesta cruda del WS */
-  raw: Record<string, unknown>;
+/** `FacturaInformadaAgtDptoCltvType`. */
+export interface FacturaInformadaAgtDptoCltv {
+  idFactura: IdComprobante;
+  infoAgtDptoCltv: InfoAgtDptoCltv;
 }
 
-// ---------------------------------------------------------------------------
-// Retenciones
-// ---------------------------------------------------------------------------
+export interface ConsultarFacturasAgtDptoCltvResult extends InfoRespuesta {
+  facturas: FacturaInformadaAgtDptoCltv[];
+}
 
-export interface RetencionFecred {
-  /** Codigo de tipo de retencion */
-  codTipoRetencion: number;
-  /** Descripcion del tipo de retencion */
-  descTipoRetencion?: string;
-  /** Importe de la retencion */
-  importeRetencion: number;
-  /** Porcentaje de la retencion */
-  porcentajeRetencion?: number;
+export interface ConsultarCuentasEnAgtDptoCltvResult extends InfoRespuesta {
+  cuentas: CuentaEnAgente[];
 }
 
 // ---------------------------------------------------------------------------
-// Tipos de parametros (respuestas de consultas de tipos)
+// Tablas de parámetros
 // ---------------------------------------------------------------------------
 
-export interface TipoRetencionItem {
-  /** Codigo del tipo de retencion */
-  codTipoRetencion: number;
-  /** Descripcion */
-  descTipoRetencion: string;
-}
-
-export interface TipoFormaCancelacionItem {
-  /** Codigo de la forma de cancelacion */
-  codFormaCancelacion: number;
-  /** Descripcion */
-  descFormaCancelacion: string;
-}
-
-export interface TipoAjusteOperacionItem {
-  /** Codigo del tipo de ajuste */
-  codTipoAjuste: number;
-  /** Descripcion */
-  descTipoAjuste: string;
-}
-
-export interface TipoMotivoRechazoItem {
-  /** Codigo del motivo de rechazo */
-  codMotivoRechazo: number;
-  /** Descripcion */
-  descMotivoRechazo: string;
-}
-
-// ---------------------------------------------------------------------------
-// Service errors
-// ---------------------------------------------------------------------------
-
-export interface WsFecredError {
-  Code: number;
-  Msg: string;
+/** `TipoRetencionType`. */
+export interface TipoRetencion {
+  codigoJurisdiccion: number;
+  descripcionJurisdiccion: string;
+  porcentajeRetencion: number;
 }

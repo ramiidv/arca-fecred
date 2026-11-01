@@ -1,115 +1,98 @@
-import { WSAA_ENDPOINTS } from '@ramiidv/arca-common';
-
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
 
+/**
+ * Endpoints y datos del servicio WSFECRED (FECredService).
+ * Fuente: WSDL de homologación (`soap:address`) y namespace `targetNamespace`.
+ * Los endpoints de WSAA están en `WSAA_ENDPOINTS` de `@ramiidv/arca-common`.
+ */
 export const ENDPOINTS = {
-  wsaa: WSAA_ENDPOINTS,
   wsfecred: {
     testing: 'https://fwshomo.afip.gob.ar/wsfecred/FECredService',
     production: 'https://serviciosjava.afip.gob.ar/wsfecred/FECredService',
-    namespace: 'https://serviciosjava.afip.gob.ar/wsfecred/FECredService?wsdl',
+    namespace: 'http://ar.gob.afip.wsfecred/FECredService/',
     serviceId: 'wsfecred',
   },
 } as const;
 
 // ---------------------------------------------------------------------------
-// Roles en la cuenta corriente
+// Enumeraciones del XSD (xsd:simpleType con xsd:enumeration)
 // ---------------------------------------------------------------------------
+// Se exportan como objeto + tipo: se puede usar `RolCtaCte.EMISOR` o el literal `'Emisor'`.
 
-/** Rol del contribuyente en la cuenta corriente FCE */
-export enum RolCtaCte {
-  /** Emisor de la FCE */
-  EMISOR = 'Emisor',
-  /** Receptor de la FCE */
-  RECEPTOR = 'Receptor',
-}
+/** `RolSimpleType`: rol de la CUIT representada en la operación. */
+export const RolCtaCte = {
+  EMISOR: 'Emisor',
+  RECEPTOR: 'Receptor',
+} as const;
+export type RolCtaCte = (typeof RolCtaCte)[keyof typeof RolCtaCte];
 
-// ---------------------------------------------------------------------------
-// Estados de la cuenta corriente
-// ---------------------------------------------------------------------------
+/** `EstadoCtaCteSimpleType`: estado de la cuenta corriente de una FCE. */
+export const EstadoCtaCte = {
+  MODIFICABLE: 'Modificable',
+  ACEPTADA: 'Aceptada',
+  RECHAZADA: 'Rechazada',
+  CANCELADA_TOTAL: 'CanceladaTotal',
+  INFORMADA_AG_DPTO: 'InformadaAgDpto',
+} as const;
+export type EstadoCtaCte = (typeof EstadoCtaCte)[keyof typeof EstadoCtaCte];
 
-/** Estado de la cuenta corriente FCE */
-export enum EstadoCtaCte {
-  /** Factura emitida, pendiente de aceptacion/rechazo */
-  PENDIENTE_ACEPTACION = 'Pendiente de Aceptacion',
-  /** Factura aceptada */
-  ACEPTADA = 'Aceptada',
-  /** Factura rechazada */
-  RECHAZADA = 'Rechazada',
-  /** Factura cancelada (pagada) */
-  CANCELADA = 'Cancelada',
-  /** Factura anulada */
-  ANULADA = 'Anulada',
-}
+/** `EstadoCmpSimpleType`: estado de un comprobante (factura o nota). */
+export const EstadoComprobante = {
+  PENDIENTE_RECEPCION: 'PendienteRecepcion',
+  RECEPCIONADO: 'Recepcionado',
+  ACEPTADO: 'Aceptado',
+  RECHAZADO: 'Rechazado',
+  INFORMADA_AG_DPTO: 'InformadaAgDpto',
+} as const;
+export type EstadoComprobante = (typeof EstadoComprobante)[keyof typeof EstadoComprobante];
 
-// ---------------------------------------------------------------------------
-// Motivos de rechazo
-// ---------------------------------------------------------------------------
+/** `TipoFechaSimpleType`: fecha por la que se filtra en `fecha{tipo,desde,hasta}`. */
+export const TipoFechaFiltro = {
+  EMISION: 'Emision',
+  PUESTA_DISPO: 'PuestaDispo',
+  VEN_PAGO: 'VenPago',
+  VEN_ACEP: 'VenAcep',
+  ACEP: 'Acep',
+  INFO_AG_DPTO_CLTV: 'InfoAgDptoCltv',
+} as const;
+export type TipoFechaFiltro = (typeof TipoFechaFiltro)[keyof typeof TipoFechaFiltro];
 
-/** Codigos de motivo de rechazo para FCE */
-export enum MotivoRechazo {
-  /** Nota de credito / debito */
-  NOTA_CREDITO_DEBITO = 1,
-  /** El CUIT informado no es correcto */
-  CUIT_INCORRECTO = 2,
-  /** La fecha informada no es correcta */
-  FECHA_INCORRECTA = 3,
-  /** El CBU informado no es correcto */
-  CBU_INCORRECTO = 4,
-  /** Otros motivos */
-  OTROS = 5,
-}
+/**
+ * `OpcionTransferenciaSimpleType`: `SCA` (Sistema de Circulación Abierta) o
+ * `ADC` (Agente de Depósito Colectivo).
+ */
+export const OpcionTransferencia = {
+  SCA: 'SCA',
+  ADC: 'ADC',
+} as const;
+export type OpcionTransferencia = (typeof OpcionTransferencia)[keyof typeof OpcionTransferencia];
 
-// ---------------------------------------------------------------------------
-// Formas de cancelacion
-// ---------------------------------------------------------------------------
+/** `TipoCancelacionSimpleType`: cancelación parcial o total al aceptar. */
+export const TipoCancelacion = {
+  PARCIAL: 'PAR',
+  TOTAL: 'TOT',
+} as const;
+export type TipoCancelacion = (typeof TipoCancelacion)[keyof typeof TipoCancelacion];
 
-/** Formas de cancelacion de una FCE aceptada */
-export enum FormaCancelacion {
-  /** Acreditacion en cuenta bancaria */
-  ACREDITACION_CUENTA = 1,
-  /** Transferencia bancaria */
-  TRANSFERENCIA = 2,
-  /** Cheque */
-  CHEQUE = 3,
-  /** Pago electronico */
-  PAGO_ELECTRONICO = 4,
-  /** Compensacion */
-  COMPENSACION = 5,
-  /** Endoso */
-  ENDOSO = 6,
-  /** Otro */
-  OTRO = 99,
-}
+/** `TipoAceptacionSimpleType`. */
+export const TipoAceptacion = {
+  TACITA: 'Tacita',
+  EXPRESA: 'Expresa',
+} as const;
+export type TipoAceptacion = (typeof TipoAceptacion)[keyof typeof TipoAceptacion];
 
-// ---------------------------------------------------------------------------
-// Tipos de ajuste de operacion
-// ---------------------------------------------------------------------------
+/**
+ * `ResultadoSimpleType`: `A`, `O` o `R`. Por convención de ARCA: aprobado,
+ * observado (aprobado con observaciones) y rechazado.
+ */
+export const Resultado = {
+  APROBADO: 'A',
+  OBSERVADO: 'O',
+  RECHAZADO: 'R',
+} as const;
+export type Resultado = (typeof Resultado)[keyof typeof Resultado];
 
-/** Tipos de ajuste de operacion FCE */
-export enum TipoAjusteOperacion {
-  /** Nota de credito */
-  NOTA_CREDITO = 1,
-  /** Nota de debito */
-  NOTA_DEBITO = 2,
-}
-
-// ---------------------------------------------------------------------------
-// Tipos de retencion
-// ---------------------------------------------------------------------------
-
-/** Tipos de retencion comunes en FCE */
-export enum TipoRetencion {
-  /** Ganancias */
-  GANANCIAS = 1,
-  /** IVA */
-  IVA = 2,
-  /** SUSS */
-  SUSS = 3,
-  /** Ingresos Brutos */
-  INGRESOS_BRUTOS = 4,
-  /** Otras */
-  OTRAS = 99,
-}
+/** `TipoCodAutorizacionType` (enumeración del XSD: `A` o `E`). */
+export type TipoCodAutorizacion = 'A' | 'E';

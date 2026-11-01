@@ -4,347 +4,186 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
-SDK en TypeScript para el web service **WSFECRED** de **ARCA** (ex AFIP) -- Factura de Credito Electronica MiPyME (Ley 27440).
+SDK en TypeScript para el web service **WSFECRED** (FECredService) de **ARCA** (ex AFIP): Factura de Crédito Electrónica MiPyME (Ley 27.440).
 
-Gestiona el ciclo de vida completo de las FCE: consulta de obligados, cuentas corrientes, comprobantes, aceptacion, rechazo e informar cancelacion.
+Cubre todas las operaciones del WSDL: obligación de recepción, cuentas corrientes, comprobantes, historial de estados, remitos, aceptación, rechazo, cancelación total, rechazo de notas de débito/crédito, opción de transferencia, Agentes de Depósito Colectivo y tablas de parámetros.
 
-## Instalacion
+> **0.3.0 es un cambio incompatible**: la versión anterior no funcionaba contra ARCA (namespace, auth y nombres de operaciones incorrectos). Ver [CHANGELOG](./CHANGELOG.md).
+
+## Instalación
 
 ```bash
 npm install @ramiidv/arca-fecred
 ```
 
-## Requisitos
+Requisitos: Node.js >= 18 y un certificado de ARCA con el servicio `wsfecred` autorizado
+([WSASS homologación](https://wsass-homo.afip.gob.ar/wsass/portal/main.aspx) o
+[Administración de Certificados Digitales](https://www.afip.gob.ar/ws/documentacion/certificados.asp) en producción).
 
-- Node.js >= 18
-- Certificado digital X.509 y clave privada de ARCA
-  - **Testing**: generalo desde [WSASS Homologacion](https://wsass-homo.afip.gob.ar/wsass/portal/main.aspx)
-  - **Produccion**: generalo desde [Administracion de Certificados Digitales](https://www.afip.gob.ar/ws/documentacion/certificados.asp) (requiere clave fiscal en [arca.gob.ar](https://arca.gob.ar))
-
-## Uso rapido
+## Uso rápido
 
 ```typescript
 import { readFileSync } from 'fs';
-import { ArcaFecred, RolCtaCte, MotivoRechazo, FormaCancelacion } from '@ramiidv/arca-fecred';
+import { ArcaFecred, FileTicketStorage } from '@ramiidv/arca-fecred';
 
 const fecred = new ArcaFecred({
   cert: readFileSync('./cert.pem', 'utf-8'),
   key: readFileSync('./key.pem', 'utf-8'),
-  cuit: '20123456789',
-  production: false, // true para produccion
+  cuit: '20-12345678-6',          // CUIT representada (number o string, con o sin guiones)
+  production: false,
+  ticketStorage: new FileTicketStorage('./.arca-tickets'),
 });
 
-// Verificar si una CUIT esta obligada a recibir FCE
-const obligado = await fecred.consultarMontoObligadoRecepcion('30712345678');
-console.log(obligado.obligado); // true/false
-
-// Consultar cuentas corrientes como receptor
-const cuentas = await fecred.consultarCtasCtes({
-  rol: RolCtaCte.RECEPTOR,
-  fechaDesde: '2026-01-01',
-  fechaHasta: '2026-03-31',
+// ¿La CUIT receptora está obligada a recibir FCE?
+const { obligado, montoDesde } = await fecred.consultarMontoObligadoRecepcion({
+  cuitConsultada: '30712345671',
+  fechaEmision: '2026-11-01',
 });
 
-for (const cta of cuentas) {
-  console.log(`FCE #${cta.codCtaCte}: $${cta.importeTotal} - ${cta.estado}`);
-}
+// Cuentas corrientes recibidas en octubre (paginado)
+const { ctasCtes, hayMas } = await fecred.consultarCtasCtes({
+  rol: 'Receptor',
+  fecha: { tipo: 'Emision', desde: '2026-10-01', hasta: '2026-10-31' },
+});
 
 // Aceptar una FCE
-const aceptar = await fecred.aceptarFECred(12345);
-console.log(aceptar.resultado);
-
-// Rechazar una FCE
-const rechazar = await fecred.rechazarFECred(12345, MotivoRechazo.CBU_INCORRECTO);
-console.log(rechazar.resultado);
-
-// Informar que una FCE aceptada fue pagada
-const cancelar = await fecred.informarFacturaAceptadaCancelada({
-  codCtaCte: 12345,
-  codFormaCancelacion: FormaCancelacion.TRANSFERENCIA,
+const r = await fecred.aceptarFECred({
+  idCtaCte: { codCtaCte: ctasCtes[0].codCtaCte },
+  saldoAceptado: ctasCtes[0].saldo,
+  codMoneda: ctasCtes[0].codMoneda,
+  cotizacionMonedaUlt: 1,
 });
-console.log(cancelar.resultado);
+console.log(r.resultado); // 'A' o 'O' (un rechazo se lanza como ArcaServiceError)
 ```
 
-## Configuracion
+## Configuración
 
-```typescript
-const fecred = new ArcaFecred({
-  cert: '...',               // Certificado X.509 (PEM)
-  key: '...',                // Clave privada (PEM)
-  cuit: '20123456789',       // CUIT representada
-  production: false,          // Default: false (testing/homologacion)
-  timeout: 30_000,            // Default: 30000 (30 segundos)
-  retries: 1,                 // Default: 1 (reintentos en errores transitorios)
-  retryDelayMs: 1_000,        // Default: 1000 (backoff exponencial: 1s, 2s, ...)
-  onEvent: (e) => {           // Opcional: callback para logging/debugging
-    console.log(e.type, e);
-  },
-});
-```
+`ArcaFecredConfig` extiende `ArcaBaseConfig` de `@ramiidv/arca-common`:
 
-## Ejemplos
-
-### Verificar obligacion de recepcion FCE
-
-```typescript
-const resultado = await fecred.consultarMontoObligadoRecepcion('30712345678');
-
-if (resultado.obligado) {
-  console.log(`CUIT obligada a recibir FCE desde $${resultado.montoDesde}`);
-} else {
-  console.log('CUIT no obligada a recibir FCE');
-}
-```
-
-### Consultar cuentas corrientes
-
-```typescript
-// Como emisor (mis facturas FCE emitidas)
-const misEmitidas = await fecred.consultarCtasCtes({
-  rol: RolCtaCte.EMISOR,
-  fechaDesde: '2026-01-01',
-  fechaHasta: '2026-03-31',
-});
-
-// Como receptor (FCE que me enviaron)
-const recibidas = await fecred.consultarCtasCtes({
-  rol: RolCtaCte.RECEPTOR,
-  cuitEmisor: '30712345678', // opcional: filtrar por emisor
-  fechaDesde: '2026-01-01',
-  fechaHasta: '2026-03-31',
-});
-```
-
-### Consultar comprobantes FCE
-
-```typescript
-// Buscar por CUIT emisor
-const comprobantes = await fecred.consultarComprobantes({
-  cuitEmisor: '30712345678',
-  fechaDesde: '2026-01-01',
-  fechaHasta: '2026-03-31',
-});
-
-// Buscar un comprobante especifico por codigo de cuenta corriente
-const comprobante = await fecred.consultarComprobantes({
-  codCtaCte: 12345,
-});
-```
-
-### Aceptar y luego informar cancelacion
-
-```typescript
-import { FormaCancelacion } from '@ramiidv/arca-fecred';
-
-// 1. Aceptar la FCE
-await fecred.aceptarFECred(12345);
-
-// 2. Luego de pagar, informar la cancelacion
-await fecred.informarFacturaAceptadaCancelada({
-  codCtaCte: 12345,
-  codFormaCancelacion: FormaCancelacion.TRANSFERENCIA,
-  observaciones: 'Transferencia realizada el 2026-03-15',
-});
-```
-
-### Rechazar una FCE
-
-```typescript
-import { MotivoRechazo } from '@ramiidv/arca-fecred';
-
-await fecred.rechazarFECred(12345, MotivoRechazo.OTROS);
-```
-
-### Consultar parametros disponibles
-
-```typescript
-// Tipos de retencion
-const retenciones = await fecred.consultarTiposRetenciones();
-for (const r of retenciones) {
-  console.log(`${r.codTipoRetencion}: ${r.descTipoRetencion}`);
-}
-
-// Formas de cancelacion
-const formas = await fecred.consultarTiposFormasCancelacion();
-
-// Tipos de ajuste de operacion
-const ajustes = await fecred.consultarTiposAjustesOperacion();
-
-// Motivos de rechazo
-const motivos = await fecred.consultarTiposMotivoRechazo();
-```
-
-### Health check
-
-```typescript
-const status = await fecred.status();
-console.log(status.appserver); // "OK"
-console.log(status.dbserver);  // "OK"
-console.log(status.authserver); // "OK"
-```
-
-## Retry automatico
-
-El SDK reintenta automaticamente en errores transitorios (timeout, HTTP 5xx, errores de red). No reintenta en errores de negocio (4xx, errores de ARCA).
-
-- **Default**: 1 reintento con backoff exponencial (1s, 2s, ...)
-- **Configurable**: `retries: 0` para desactivar, `retries: 3` para mas intentos
-
-```typescript
-const fecred = new ArcaFecred({
-  ...config,
-  retries: 2,         // 2 reintentos (3 intentos totales)
-  retryDelayMs: 2000, // empezar con 2s -> 4s -> 8s
-});
-```
-
-## Eventos / Logging
-
-El SDK emite eventos para debugging y monitoreo sin forzar un logger especifico.
-
-```typescript
-const fecred = new ArcaFecred({
-  ...config,
-  onEvent: (e) => console.log(`[${e.type}]`, e),
-});
-```
-
-| Evento | Cuando | Datos |
-| --- | --- | --- |
-| `auth:login` | Nuevo token obtenido | `service`, `durationMs` |
-| `auth:cache-hit` | Token cacheado reutilizado | `service` |
-| `request:start` | Antes de una llamada SOAP | `method`, `endpoint` |
-| `request:end` | Llamada SOAP completada | `method`, `durationMs` |
-| `request:retry` | Reintentando tras error | `method`, `attempt`, `error` |
-| `request:error` | Llamada SOAP fallo | `method`, `error` |
-
-## Manejo de errores
-
-El SDK provee clases de error especificas para catch granular:
-
-```typescript
-import {
-  ArcaFecred,
-  ArcaAuthError,
-  ArcaServiceError,
-  ArcaSoapError,
-} from '@ramiidv/arca-fecred';
-
-try {
-  const resultado = await fecred.aceptarFECred(12345);
-} catch (e) {
-  if (e instanceof ArcaAuthError) {
-    // Error de autenticacion WSAA (certificado invalido, expirado, etc.)
-    console.error('Auth error:', e.message);
-    fecred.clearAuthCache(); // Limpiar cache e intentar de nuevo
-  }
-
-  if (e instanceof ArcaServiceError) {
-    // Error de negocio de WSFECRED (FCE no encontrada, estado invalido, etc.)
-    for (const err of e.errors) {
-      console.error(`[${err.code}] ${err.msg}`);
-    }
-  }
-
-  if (e instanceof ArcaSoapError) {
-    // Error HTTP/SOAP (timeout, servidor caido, etc.)
-    console.error('HTTP status:', e.statusCode);
-  }
-}
-```
-
-| Clase | Cuando se lanza |
-| --- | --- |
-| `ArcaAuthError` | Falla en login WSAA, respuesta inesperada, token/sign invalidos |
-| `ArcaServiceError` | Error devuelto por WSFECRED (FCE no encontrada, operacion invalida, etc.). Contiene `errors: { code, msg }[]` |
-| `ArcaSoapError` | Error HTTP, timeout, SOAP Fault. Contiene `statusCode?: number` |
-| `ArcaError` | Clase base para todos los errores del SDK |
-
-## API
-
-### `new ArcaFecred(config)`
-
-| Parametro | Tipo | Default | Descripcion |
+| Opción | Tipo | Default | Descripción |
 | --- | --- | --- | --- |
-| `cert` | `string` | -- | Contenido del certificado X.509 (PEM) |
-| `key` | `string` | -- | Contenido de la clave privada (PEM) |
-| `cuit` | `string` | -- | CUIT de la entidad representada |
-| `production` | `boolean` | `false` | Entorno de produccion |
-| `timeout` | `number` | `30000` | Timeout HTTP en milisegundos |
-| `retries` | `number` | `1` | Reintentos en errores transitorios |
-| `retryDelayMs` | `number` | `1000` | Delay inicial entre reintentos (exponencial) |
-| `onEvent` | `function` | -- | Callback para eventos del SDK |
+| `cert`, `key` | `string` | — | Certificado y clave privada (PEM) |
+| `cuit` | `number \| string` | — | CUIT representada; se valida el dígito verificador y se envía como 11 dígitos |
+| `production` | `boolean` | `false` | Homologación o producción |
+| `timeout` | `number` | `30000` | Timeout HTTP (ms) |
+| `retries` / `retryDelayMs` | `number` | `1` / `1000` | Reintentos de **consultas** (las operaciones nunca se reintentan) |
+| `tokenTTLMinutes` | `number` | `720` | Vigencia pedida a WSAA |
+| `ticketStorage` | `TicketStorage` | — | Persistencia del TA (recomendado en producción: `FileTicketStorage` o propio) |
+| `clockOffsetMs`, `autoClockSkew`, `loginErrorCooldownMs` | | | Opciones de WSAA (ver arca-common) |
+| `fetch` | `typeof fetch` | `globalThis.fetch` | `fetch` propio (proxy, tests) |
+| `legacyTls` | `'auto' \| 'never' \| 'always'` | `'auto'` | Transporte TLS legacy |
+| `onEvent` | `(e: ArcaEvent) => void` | — | Eventos `auth:*` y `request:*` |
+| `wsaa` | `WsaaClient` | — | `WsaaClient` propio (compartir tickets entre SDKs) |
+| `endpoints` | `{ wsfecred?, wsaa? }` | — | Sobrescribe las URLs |
 
-### Consultas de operaciones
+Todos los métodos aceptan un último parámetro opcional `opts?: CallOptions` (`{ signal }`) para cancelar.
 
-| Metodo | Descripcion |
-| --- | --- |
-| `consultarMontoObligadoRecepcion(cuit)` | Verifica si una CUIT esta obligada a recibir FCE |
-| `consultarCtasCtes(params)` | Consulta cuentas corrientes de actividad FCE |
-| `consultarComprobantes(params)` | Busca comprobantes FCE por filtros |
+## Operaciones
 
-### Acciones sobre FCE
+Fuente: WSDL de FECredService (`https://fwshomo.afip.gob.ar/wsfecred/FECredService?wsdl`). Los nombres de campos siguen el XSD.
 
-| Metodo | Descripcion |
-| --- | --- |
-| `aceptarFECred(codCtaCte)` | Acepta una FCE |
-| `rechazarFECred(codCtaCte, codMotivoRechazo)` | Rechaza una FCE con motivo |
-| `informarFacturaAceptadaCancelada(params)` | Informa que una FCE aceptada fue pagada/cancelada |
+### Consultas (se reintentan ante errores transitorios)
 
-### Consultas de parametros
+| Método | Operación | Devuelve |
+| --- | --- | --- |
+| `status()` | `dummy` | `{ appserver, dbserver, authserver }` |
+| `consultarMontoObligadoRecepcion({ cuitConsultada, fechaEmision })` | idem | `{ obligado, montoDesde?, evento?, observaciones }` |
+| `consultarObligadoRecepcion(cuit)` | idem | `{ obligado, desde?, ... }` (campo `respuesta` del WS) |
+| `consultarCtasCtes({ rol, cuitContraparte?, fecha?, estadoCtaCte?, nroPagina?, opcionTransferencia? })` | idem | `{ ctasCtes: InfoCtaCte[], nroPagina?, hayMas?, ... }` |
+| `consultarCtaCte(idCtaCte)` | idem | `{ ctaCte: CuentaCorriente, ... }` |
+| `consultarComprobantes({ rol, cuitContraparte?, codTipoCmp?, estadoCmp?, fecha?, codCtaCte?, estadoCtaCte?, nroPagina? })` | idem | `{ comprobantes: Comprobante[], nroPagina?, hayMas?, ... }` |
+| `consultarHistorialEstadosComprobante(idComprobante)` | idem | `{ idComprobante, estados }` |
+| `consultarHistorialEstadosCtaCte(idCtaCte)` | idem | `{ idCtaCte, estados }` |
+| `obtenerRemitos(idComprobante)` | idem | `IdComprobante[]` |
+| `consultarCuentasEnAgtDptoCltv()` | idem | `{ cuentas, ... }` |
+| `consultarFacturasAgtDptoCltv({ idCtaCte?, fecha? })` | idem | `{ facturas, ... }` |
+| `consultarTiposRetenciones()` | idem | `{ codigoJurisdiccion, descripcionJurisdiccion, porcentajeRetencion }[]` |
+| `consultarTiposFormasCancelacion()` | idem | `{ codigo, descripcion }[]` |
+| `consultarTiposMotivosRechazo()` | idem | `{ codigo, descripcion }[]` |
+| `consultarTiposAjustesOperacion()` | idem | `{ codigo, descripcion }[]` |
 
-| Metodo | Descripcion |
-| --- | --- |
-| `consultarTiposRetenciones()` | Tipos de retenciones disponibles |
-| `consultarTiposFormasCancelacion()` | Formas de cancelacion disponibles |
-| `consultarTiposAjustesOperacion()` | Tipos de ajustes de operacion disponibles |
-| `consultarTiposMotivoRechazo()` | Motivos de rechazo disponibles |
+### Operaciones que cambian estado (emisiones: nunca se reintentan)
 
-### Estado y utilidades
+| Método | Operación | Devuelve |
+| --- | --- | --- |
+| `aceptarFECred({ idCtaCte, saldoAceptado, codMoneda, cotizacionMonedaUlt, ... })` | idem | `{ resultado: 'A' \| 'O', idCtaCte, evento?, observaciones }` |
+| `rechazarFECred({ idCtaCte, motivos })` | idem | idem |
+| `informarCancelacionTotalFECred({ idCtaCte, formasCancelacion, importeCancelacion })` | idem | idem |
+| `modificarOpcionTransferencia({ idCtaCte, opcionTransferencia })` | idem | idem |
+| `informarFacturaAgtDptoCltv({ idCtaCte, ctaAgente })` | idem | idem |
+| `rechazarNotaDC({ idComprobante, motivos })` | idem | `{ resultado, idComprobante, ... }` |
 
-| Metodo | Descripcion |
-| --- | --- |
-| `status()` | Health check del servicio WSFECRED (no requiere autenticacion) |
-| `clearAuthCache()` | Invalida el ticket de acceso cacheado |
+`aceptarFECred` acepta además los opcionales del XSD: `confirmarNotasDC` (`{ acepta, idNota }[]`), `formasCancelacion`, `retenciones` (`{ codTipo, importe, porcentaje, descMotivo? }[]`), `ajustesOperacion` (`{ codigo, importe }[]`), `tipoCancelacion` (`'PAR' | 'TOT'`), `importeCancelado`, `importeTotalRetPesos`, `importeEmbargoPesos`, `informaCBU` y `cbuComprador`.
 
-### Acceso a clientes de bajo nivel
-
-Para casos avanzados, se pueden usar los clientes individuales directamente:
+### Identificadores
 
 ```typescript
-const fecred = new ArcaFecred({ /* ... */ });
+// IdCtaCteType es un xsd:choice: por código de cuenta corriente o por factura
+const porCodigo = { codCtaCte: '1234567890' };
+const porFactura = { idFactura: { cuitEmisor: '30712345671', codTipoCmp: 201, ptoVta: 3, nroCmp: 125 } };
 
-// Obtener ticket de acceso manualmente
-const ticket = await fecred.wsaa.getAccessTicket('wsfecred');
-
-const credenciales = {
-  Token: ticket.token,
-  Sign: ticket.sign,
-  Cuit: '20123456789',
-};
-
-// Llamar directamente al servicio
-const rawResult = await fecred.fecred.consultarMontoObligadoRecepcion(
-  credenciales,
-  '30712345678',
-);
+await fecred.consultarCtaCte(porFactura);
 ```
 
-## Enums disponibles
+Las respuestas devuelven `codCtaCte`, CUITs y `codAutorizacion` (CAE) como **string**; importes como `number`; fechas como el string que envía ARCA; los `S`/`N` como `boolean`.
 
-- `RolCtaCte` -- Rol en la cuenta corriente (EMISOR, RECEPTOR)
-- `EstadoCtaCte` -- Estado de la cuenta corriente (PENDIENTE_ACEPTACION, ACEPTADA, RECHAZADA, CANCELADA, ANULADA)
-- `MotivoRechazo` -- Motivos de rechazo (NOTA_CREDITO_DEBITO, CUIT_INCORRECTO, FECHA_INCORRECTA, CBU_INCORRECTO, OTROS)
-- `FormaCancelacion` -- Formas de cancelacion (ACREDITACION_CUENTA, TRANSFERENCIA, CHEQUE, PAGO_ELECTRONICO, COMPENSACION, ENDOSO, OTRO)
-- `TipoAjusteOperacion` -- Tipos de ajuste (NOTA_CREDITO, NOTA_DEBITO)
-- `TipoRetencion` -- Tipos de retencion (GANANCIAS, IVA, SUSS, INGRESOS_BRUTOS, OTRAS)
+### Paginado
+
+`consultarCtasCtes` y `consultarComprobantes` devuelven `nroPagina` y `hayMas`. Pedí la página siguiente con `nroPagina`.
+
+### Tablas de códigos
+
+Los códigos de formas de cancelación, motivos de rechazo, ajustes de operación y retenciones **no están en el WSDL**: obtenelos con `consultarTipos*()`. El SDK solo exporta las enumeraciones definidas en el XSD:
+`RolCtaCte`, `EstadoCtaCte` (`Modificable`, `Aceptada`, `Rechazada`, `CanceladaTotal`, `InformadaAgDpto`), `EstadoComprobante`, `TipoFechaFiltro`, `OpcionTransferencia` (`SCA`, `ADC`), `TipoCancelacion` (`PAR`, `TOT`), `TipoAceptacion` y `Resultado`. Se pueden usar como `RolCtaCte.RECEPTOR` o con el literal (`'Receptor'`).
+
+## Errores
+
+| Clase | Cuándo |
+| --- | --- |
+| `ArcaValidationError` | Datos inválidos (CUIT con dígito verificador incorrecto, fechas inexistentes, importes NaN/negativos, textos fuera de 3..250, CBU inválido, etc.). No se llega a pedir el ticket ni a llamar a ARCA. `field` indica el parámetro. |
+| `ArcaServiceError` | ARCA devolvió `arrayErrores` o `arrayErroresFormato`, o una operación terminó con `resultado = 'R'`. `errors: { code, msg, rawCode? }[]` (`rawCode` para los códigos alfanuméricos de `arrayErroresFormato`). |
+| `ArcaSoapError` | HTTP, timeout, SOAP Fault (ej: `wscommon_005`/`wscommon_007` de auth) o respuesta sin un campo obligatorio del XSD. `uncertain` indica si ARCA pudo haber procesado el request. |
+| `ArcaAuthError` / `ArcaTicketVigenteError` | Falla de WSAA / ya hay un TA vigente que no está en el `ticketStorage`. |
+
+Las observaciones (`arrayObservaciones`) y el `evento` no son errores: vienen en el resultado.
+
+### Resultado incierto en operaciones
+
+Las emisiones (`aceptarFECred`, `rechazarFECred`, `informarCancelacionTotalFECred`, `rechazarNotaDC`, `modificarOpcionTransferencia`, `informarFacturaAgtDptoCltv`) se envían una sola vez. Si la respuesta se pierde (timeout, conexión cortada, HTTP 5xx, respuesta ilegible) se lanza `ArcaSoapError` con `uncertain = true`: la operación **pudo haberse registrado**. Antes de reintentar, consultá el estado:
+
+```typescript
+try {
+  await fecred.aceptarFECred(params);
+} catch (e) {
+  if (e instanceof ArcaSoapError && e.uncertain) {
+    const { estados } = await fecred.consultarHistorialEstadosCtaCte(params.idCtaCte);
+    // o consultarCtaCte(params.idCtaCte) → ctaCte.estadoCtaCte.estado
+    // Si ya figura Aceptada/Rechazada, no reintentar.
+  }
+  throw e;
+}
+```
+
+## Cliente de bajo nivel
+
+`fecred.fecred` es un `FecredClient`: los mismos métodos con las credenciales como primer parámetro y respuestas tipadas.
+
+```typescript
+const ticket = await fecred.wsaa.getAccessTicket('wsfecred');
+const auth = { token: ticket.token, sign: ticket.sign, cuitRepresentada: '20123456786' };
+const tipos = await fecred.fecred.consultarTiposMotivosRechazo(auth);
+```
+
+Detalles del protocolo (verificados contra homologación): namespace `http://ar.gob.afip.wsfecred/FECredService/`, wrapper `<operacionRequest>`, header `SOAPAction` = namespace + operación (obligatorio), `dummy` con Body vacío.
 
 ## Entornos
 
-| Entorno | WSAA | WSFECRED |
-| --- | --- | --- |
-| Testing | `wsaahomo.afip.gov.ar` | `fwshomo.afip.gob.ar` |
-| Produccion | `wsaa.afip.gov.ar` | `serviciosjava.afip.gob.ar` |
+| Entorno | WSFECRED |
+| --- | --- |
+| Homologación | `https://fwshomo.afip.gob.ar/wsfecred/FECredService` |
+| Producción | `https://serviciosjava.afip.gob.ar/wsfecred/FECredService` |
+
+Los endpoints de WSAA están en `WSAA_ENDPOINTS` de `@ramiidv/arca-common`.
 
 ## Licencia
 

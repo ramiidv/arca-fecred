@@ -1,178 +1,65 @@
 import { describe, it, expect } from 'vitest';
-import { validateCuit, validateCodCtaCte, validateConsultaCtasCtes } from '../src/validation.js';
+import { ArcaValidationError } from '@ramiidv/arca-common';
+import {
+  cuitParam,
+  dateParam,
+  idCtaCteParam,
+  importeParam,
+  longParam,
+  porcentajeParam,
+} from '../src/validation.js';
 
-// ---------------------------------------------------------------------------
-// validateCuit
-// ---------------------------------------------------------------------------
-
-describe('validateCuit', () => {
-  it('accepts a valid CUIT string', () => {
-    expect(validateCuit('20123456789')).toBe('20123456789');
+describe('validación local', () => {
+  it('cuitParam usa el dígito verificador y devuelve 11 dígitos', () => {
+    expect(cuitParam('20-12345678-6', 'cuit')).toBe('20123456786');
+    expect(cuitParam(20123456786, 'cuit')).toBe('20123456786');
+    const err = (() => {
+      try {
+        cuitParam('20123456780', 'cuitContraparte');
+      } catch (e) {
+        return e as ArcaValidationError;
+      }
+    })();
+    expect(err).toBeInstanceOf(ArcaValidationError);
+    expect(err?.field).toBe('cuitContraparte');
   });
 
-  it('accepts a CUIT string with hyphens', () => {
-    expect(validateCuit('20-12345678-9')).toBe('20-12345678-9');
+  it('dateParam devuelve xsd:date y rechaza fechas inexistentes', () => {
+    expect(dateParam('20261101', 'f')).toBe('2026-11-01');
+    expect(dateParam('2026-11-01', 'f')).toBe('2026-11-01');
+    expect(() => dateParam('2026-02-30', 'f')).toThrow(ArcaValidationError);
+    expect(() => dateParam(20261101, 'f')).toThrow(ArcaValidationError);
   });
 
-  it('accepts a positive integer number', () => {
-    expect(validateCuit(20123456789)).toBe('20123456789');
+  it('importeParam redondea a 2 decimales y rechaza NaN/Infinity/negativos', () => {
+    expect(importeParam(10, 'x')).toBe('10.00');
+    expect(importeParam(1.005 + 1e-9, 'x')).toBe('1.01');
+    expect(importeParam(-5, 'x', true)).toBe('-5.00');
+    expect(() => importeParam(Number.NaN, 'x')).toThrow(ArcaValidationError);
+    expect(() => importeParam(Infinity, 'x')).toThrow(ArcaValidationError);
+    expect(() => importeParam(-1, 'x')).toThrow(/negativo/);
+    expect(() => importeParam(1e14, 'x')).toThrow(/máximo/);
   });
 
-  it('throws on empty string', () => {
-    expect(() => validateCuit('')).toThrow('vacio');
+  it('porcentajeParam 0..100', () => {
+    expect(porcentajeParam(3.5, 'p')).toBe('3.5');
+    expect(() => porcentajeParam(101, 'p')).toThrow(ArcaValidationError);
   });
 
-  it('throws on whitespace-only string', () => {
-    expect(() => validateCuit('   ')).toThrow('vacio');
+  it('longParam acepta number o string de dígitos', () => {
+    expect(longParam(123, 'c')).toBe('123');
+    expect(longParam('00123', 'c')).toBe('123');
+    expect(() => longParam(0, 'c')).toThrow(ArcaValidationError);
+    expect(() => longParam('12a', 'c')).toThrow(ArcaValidationError);
+    expect(() => longParam(1.5, 'c')).toThrow(ArcaValidationError);
   });
 
-  it('throws on non-numeric string', () => {
-    expect(() => validateCuit('abc')).toThrow('digitos');
-  });
-
-  it('throws on negative number', () => {
-    expect(() => validateCuit(-1)).toThrow('positivo');
-  });
-
-  it('throws on zero', () => {
-    expect(() => validateCuit(0)).toThrow('positivo');
-  });
-
-  it('throws on float', () => {
-    expect(() => validateCuit(20.5)).toThrow('positivo');
-  });
-
-  it('throws on null/undefined', () => {
-    expect(() => validateCuit(null)).toThrow('numero o string');
-    expect(() => validateCuit(undefined)).toThrow('numero o string');
-  });
-
-  it('uses custom field name in error', () => {
-    expect(() => validateCuit('', 'cuitEmisor')).toThrow('cuitEmisor');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// validateCodCtaCte
-// ---------------------------------------------------------------------------
-
-describe('validateCodCtaCte', () => {
-  it('accepts a positive integer', () => {
-    expect(validateCodCtaCte(12345)).toBe(12345);
-  });
-
-  it('accepts a numeric string', () => {
-    expect(validateCodCtaCte('99999')).toBe(99999);
-  });
-
-  it('throws on empty string', () => {
-    expect(() => validateCodCtaCte('')).toThrow('vacio');
-  });
-
-  it('throws on zero', () => {
-    expect(() => validateCodCtaCte(0)).toThrow('positivo');
-  });
-
-  it('throws on negative number', () => {
-    expect(() => validateCodCtaCte(-5)).toThrow('positivo');
-  });
-
-  it('throws on non-numeric string', () => {
-    expect(() => validateCodCtaCte('abc')).toThrow('positivo');
-  });
-
-  it('throws on null', () => {
-    expect(() => validateCodCtaCte(null)).toThrow('requerido');
-  });
-
-  it('throws on undefined', () => {
-    expect(() => validateCodCtaCte(undefined)).toThrow('requerido');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// validateConsultaCtasCtes
-// ---------------------------------------------------------------------------
-
-describe('validateConsultaCtasCtes', () => {
-  const validParams = {
-    rol: 'Receptor',
-    fechaDesde: '2026-01-01',
-    fechaHasta: '2026-03-31',
-  };
-
-  it('accepts valid params', () => {
-    expect(() => validateConsultaCtasCtes(validParams)).not.toThrow();
-  });
-
-  it('accepts valid params with CUITs', () => {
+  it('idCtaCteParam valida la factura', () => {
     expect(() =>
-      validateConsultaCtasCtes({
-        ...validParams,
-        cuitEmisor: '30712345678',
-      }),
-    ).not.toThrow();
-  });
-
-  it('accepts Emisor role', () => {
+      idCtaCteParam({ idFactura: { cuitEmisor: '30712345671', codTipoCmp: 201, ptoVta: 0, nroCmp: 1 } }),
+    ).toThrow(/ptoVta/);
     expect(() =>
-      validateConsultaCtasCtes({ ...validParams, rol: 'Emisor' }),
-    ).not.toThrow();
-  });
-
-  it('throws on missing rol', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, rol: '' }),
-    ).toThrow('rol');
-  });
-
-  it('throws on invalid rol', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, rol: 'Invalido' }),
-    ).toThrow('rol');
-  });
-
-  it('throws on missing fechaDesde', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, fechaDesde: '' }),
-    ).toThrow('fechaDesde');
-  });
-
-  it('throws on invalid fechaDesde format', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, fechaDesde: '2026/01/01' }),
-    ).toThrow('fechaDesde');
-  });
-
-  it('throws on missing fechaHasta', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, fechaHasta: '' }),
-    ).toThrow('fechaHasta');
-  });
-
-  it('throws on invalid date (Feb 30)', () => {
-    expect(() =>
-      validateConsultaCtasCtes({ ...validParams, fechaDesde: '2026-02-30' }),
-    ).toThrow('fechaDesde');
-  });
-
-  it('throws when fechaHasta is before fechaDesde', () => {
-    expect(() =>
-      validateConsultaCtasCtes({
-        ...validParams,
-        fechaDesde: '2026-03-31',
-        fechaHasta: '2026-01-01',
-      }),
-    ).toThrow('fechaHasta');
-  });
-
-  it('accepts same fechaDesde and fechaHasta', () => {
-    expect(() =>
-      validateConsultaCtasCtes({
-        ...validParams,
-        fechaDesde: '2026-03-01',
-        fechaHasta: '2026-03-01',
-      }),
-    ).not.toThrow();
+      idCtaCteParam({ idFactura: { cuitEmisor: '30712345671', codTipoCmp: 201, ptoVta: 1, nroCmp: 100000000 } }),
+    ).toThrow(/nroCmp/);
   });
 });

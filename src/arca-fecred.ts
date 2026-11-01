@@ -1,92 +1,106 @@
-import { WsaaClient, ensureArray } from '@ramiidv/arca-common';
-import type { ArcaEvent, SoapCallOptions, ServerStatus } from '@ramiidv/arca-common';
+import { WsaaClient } from '@ramiidv/arca-common';
+import type { CallOptions, ServerStatus } from '@ramiidv/arca-common';
 import { ENDPOINTS } from './constants.js';
 import { FecredClient } from './fecred-client.js';
-import { validateCuit, validateCodCtaCte, validateConsultaCtasCtes } from './validation.js';
+import { cuitParam } from './validation.js';
 import type {
+  AceptarFecredParams,
   ArcaFecredConfig,
-  WsAuth,
-  MontoObligadoResult,
-  CtaCte,
-  ComprobanteFecred,
-  ConsultarCtasCtesParams,
+  CodigoDescripcion,
   ConsultarComprobantesParams,
-  AceptarFecredResult,
-  RechazarFecredResult,
-  InformarCanceladaParams,
-  InformarCanceladaResult,
-  TipoRetencionItem,
-  TipoFormaCancelacionItem,
-  TipoAjusteOperacionItem,
-  TipoMotivoRechazoItem,
+  ConsultarComprobantesResult,
+  ConsultarCtaCteResult,
+  ConsultarCtasCtesParams,
+  ConsultarCtasCtesResult,
+  ConsultarCuentasEnAgtDptoCltvResult,
+  ConsultarFacturasAgtDptoCltvParams,
+  ConsultarFacturasAgtDptoCltvResult,
+  ConsultarMontoObligadoRecepcionParams,
+  HistorialEstadosComprobanteResult,
+  HistorialEstadosCtaCteResult,
+  IdComprobante,
+  IdComprobanteInput,
+  IdCtaCteInput,
+  InformarCancelacionTotalParams,
+  InformarFacturaAgtDptoCltvParams,
+  ModificarOpcionTransferenciaParams,
+  MontoObligadoRecepcionResult,
+  ObligadoRecepcionResult,
+  OperacionFecredResult,
+  RechazarFecredParams,
+  RechazarNotaDCParams,
+  RechazarNotaDCResult,
+  TipoRetencion,
+  WsAuth,
 } from './types.js';
 
 /**
- * Main orchestrator class for ARCA WSFECRED (Factura de Credito Electronica MiPyME).
- *
- * Provides high-level methods that handle WSAA authentication automatically
- * and expose results from the WSFECRED web service for managing FCE
- * (Electronic Credit Invoices) under Law 27440.
+ * Cliente de alto nivel de WSFECRED (Factura de Crédito Electrónica MiPyME,
+ * Ley 27.440). Obtiene y cachea el Ticket de Acceso de WSAA automáticamente.
  *
  * @example
  * ```ts
- * import { ArcaFecred } from '@ramiidv/arca-fecred';
- * import { readFileSync } from 'fs';
- *
  * const fecred = new ArcaFecred({
  *   cert: readFileSync('cert.pem', 'utf-8'),
  *   key: readFileSync('key.pem', 'utf-8'),
- *   cuit: '20123456789',
- *   production: false,
+ *   cuit: '20123456786',
  * });
  *
- * // Check if a CUIT is obligated to receive FCE
- * const obligado = await fecred.consultarMontoObligadoRecepcion('30712345678');
- * console.log(obligado.obligado); // true/false
+ * const { obligado, montoDesde } = await fecred.consultarMontoObligadoRecepcion({
+ *   cuitConsultada: '30712345674',
+ *   fechaEmision: '2026-11-01',
+ * });
  *
- * // Query current accounts
- * const cuentas = await fecred.consultarCtasCtes({
+ * const { ctasCtes, hayMas } = await fecred.consultarCtasCtes({
  *   rol: 'Receptor',
- *   fechaDesde: '2026-01-01',
- *   fechaHasta: '2026-03-31',
+ *   fecha: { tipo: 'Emision', desde: '2026-10-01', hasta: '2026-10-31' },
  * });
  * ```
  */
 export class ArcaFecred {
-  /** Low-level WSAA client for direct access */
+  /** Cliente WSAA (se puede compartir con otros SDKs). */
   public readonly wsaa: WsaaClient;
-  /** Low-level WSFECRED client for direct access */
+  /** Cliente de bajo nivel de FECredService. */
   public readonly fecred: FecredClient;
 
+  /** CUIT representada (11 dígitos). */
   private readonly cuit: string;
-  private readonly onEvent?: (event: ArcaEvent) => void;
 
   constructor(config: ArcaFecredConfig) {
-    const isProduction = config.production ?? false;
-    const env = isProduction ? 'production' : 'testing';
-    this.cuit = config.cuit;
-    this.onEvent = config.onEvent;
+    const production = config.production ?? false;
+    this.cuit = cuitParam(config.cuit, 'cuit');
 
-    const soapOptions: Pick<SoapCallOptions, 'timeout' | 'retries' | 'retryDelayMs'> = {
-      timeout: config.timeout,
-      retries: config.retries,
-      retryDelayMs: config.retryDelayMs,
-    };
-
-    this.wsaa = new WsaaClient({
-      cert: config.cert,
-      key: config.key,
-      production: isProduction,
-      timeout: config.timeout,
-      retries: config.retries,
-      retryDelayMs: config.retryDelayMs,
-      onEvent: config.onEvent,
-    });
+    this.wsaa =
+      config.wsaa ??
+      new WsaaClient({
+        cert: config.cert,
+        key: config.key,
+        production,
+        endpoint: config.endpoints?.wsaa,
+        tokenTTLMinutes: config.tokenTTLMinutes,
+        timeout: config.timeout,
+        retries: config.retries,
+        retryDelayMs: config.retryDelayMs,
+        onEvent: config.onEvent,
+        ticketStorage: config.ticketStorage,
+        clockOffsetMs: config.clockOffsetMs,
+        autoClockSkew: config.autoClockSkew,
+        loginErrorCooldownMs: config.loginErrorCooldownMs,
+        fetch: config.fetch,
+        legacyTls: config.legacyTls,
+      });
 
     this.fecred = new FecredClient({
-      endpoint: ENDPOINTS.wsfecred[env],
+      endpoint:
+        config.endpoints?.wsfecred ?? (production ? ENDPOINTS.wsfecred.production : ENDPOINTS.wsfecred.testing),
       namespace: ENDPOINTS.wsfecred.namespace,
-      soapOptions,
+      soapOptions: {
+        timeout: config.timeout,
+        retries: config.retries,
+        retryDelayMs: config.retryDelayMs,
+        fetch: config.fetch,
+        legacyTls: config.legacyTls,
+      },
       onEvent: config.onEvent,
     });
   }
@@ -95,358 +109,173 @@ export class ArcaFecred {
   // Health check
   // =========================================================================
 
-  /**
-   * Health check for the WSFECRED service.
-   * Does not require authentication.
-   */
-  async status(): Promise<ServerStatus> {
-    return this.fecred.dummy();
+  /** Estado de los servidores de WSFECRED (`dummy`, sin autenticación). */
+  status(opts?: CallOptions): Promise<ServerStatus> {
+    return this.fecred.dummy(opts);
   }
 
   // =========================================================================
-  // Consultas de operaciones
+  // Obligación de recepción
+  // =========================================================================
+
+  /** Si una CUIT está obligada a recibir FCE para una fecha de emisión, y desde qué monto. */
+  consultarMontoObligadoRecepcion(
+    params: ConsultarMontoObligadoRecepcionParams,
+    opts?: CallOptions,
+  ): Promise<MontoObligadoRecepcionResult> {
+    return this.fecred.consultarMontoObligadoRecepcion(this.auth(opts), params, opts);
+  }
+
+  /** Si una CUIT está obligada a recibir FCE y desde qué fecha. */
+  consultarObligadoRecepcion(cuitConsultada: number | string, opts?: CallOptions): Promise<ObligadoRecepcionResult> {
+    return this.fecred.consultarObligadoRecepcion(this.auth(opts), cuitConsultada, opts);
+  }
+
+  // =========================================================================
+  // Consultas
+  // =========================================================================
+
+  /** Cuentas corrientes de FCE (paginado: ver `hayMas` / `nroPagina`). */
+  consultarCtasCtes(params: ConsultarCtasCtesParams, opts?: CallOptions): Promise<ConsultarCtasCtesResult> {
+    return this.fecred.consultarCtasCtes(this.auth(opts), params, opts);
+  }
+
+  /** Detalle de una cuenta corriente. */
+  consultarCtaCte(idCtaCte: IdCtaCteInput, opts?: CallOptions): Promise<ConsultarCtaCteResult> {
+    return this.fecred.consultarCtaCte(this.auth(opts), idCtaCte, opts);
+  }
+
+  /** Comprobantes FCE (paginado: ver `hayMas` / `nroPagina`). */
+  consultarComprobantes(
+    params: ConsultarComprobantesParams,
+    opts?: CallOptions,
+  ): Promise<ConsultarComprobantesResult> {
+    return this.fecred.consultarComprobantes(this.auth(opts), params, opts);
+  }
+
+  /** Historial de estados de un comprobante. */
+  consultarHistorialEstadosComprobante(
+    idComprobante: IdComprobanteInput,
+    opts?: CallOptions,
+  ): Promise<HistorialEstadosComprobanteResult> {
+    return this.fecred.consultarHistorialEstadosComprobante(this.auth(opts), idComprobante, opts);
+  }
+
+  /** Historial de estados de una cuenta corriente. */
+  consultarHistorialEstadosCtaCte(
+    idCtaCte: IdCtaCteInput,
+    opts?: CallOptions,
+  ): Promise<HistorialEstadosCtaCteResult> {
+    return this.fecred.consultarHistorialEstadosCtaCte(this.auth(opts), idCtaCte, opts);
+  }
+
+  /** Remitos asociados a un comprobante. */
+  obtenerRemitos(idComprobante: IdComprobanteInput, opts?: CallOptions): Promise<IdComprobante[]> {
+    return this.fecred.obtenerRemitos(this.auth(opts), idComprobante, opts);
+  }
+
+  // =========================================================================
+  // Operaciones (no idempotentes: nunca se reintentan)
   // =========================================================================
 
   /**
-   * Check if a CUIT is obligated to receive FCE (Factura de Credito Electronica).
-   * Authenticates automatically via WSAA.
-   *
-   * @param cuitConsultada - CUIT to check
-   * @returns Result indicating if the CUIT is obligated and the threshold amount
+   * Acepta una FCE. Un rechazo de ARCA (errores o `resultado = 'R'`) se lanza
+   * como `ArcaServiceError`. Si la respuesta se pierde (`ArcaSoapError` con
+   * `uncertain`), consultá el estado con `consultarCtaCte` antes de reintentar.
    */
-  async consultarMontoObligadoRecepcion(cuitConsultada: string): Promise<MontoObligadoResult> {
-    validateCuit(cuitConsultada, 'cuitConsultada');
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarMontoObligadoRecepcion(auth, cuitConsultada);
+  aceptarFECred(params: AceptarFecredParams, opts?: CallOptions): Promise<OperacionFecredResult> {
+    return this.fecred.aceptarFECred(this.auth(opts), params, opts);
+  }
 
-    return {
-      cuitConsultada,
-      obligado: (result['obligado'] ?? result['Obligado'] ?? false) as boolean,
-      montoDesde: result['montoDesde'] != null
-        ? Number(result['montoDesde'] ?? result['MontoDesde'])
-        : undefined,
-      raw: result,
+  /** Rechaza una FCE (motivos de `consultarTiposMotivosRechazo`). */
+  rechazarFECred(params: RechazarFecredParams, opts?: CallOptions): Promise<OperacionFecredResult> {
+    return this.fecred.rechazarFECred(this.auth(opts), params, opts);
+  }
+
+  /** Informa la cancelación total de una FCE aceptada. */
+  informarCancelacionTotalFECred(
+    params: InformarCancelacionTotalParams,
+    opts?: CallOptions,
+  ): Promise<OperacionFecredResult> {
+    return this.fecred.informarCancelacionTotalFECred(this.auth(opts), params, opts);
+  }
+
+  /** Rechaza una nota de débito/crédito asociada a una FCE. */
+  rechazarNotaDC(params: RechazarNotaDCParams, opts?: CallOptions): Promise<RechazarNotaDCResult> {
+    return this.fecred.rechazarNotaDC(this.auth(opts), params, opts);
+  }
+
+  /** Cambia la opción de transferencia (SCA/ADC) de una cuenta corriente. */
+  modificarOpcionTransferencia(
+    params: ModificarOpcionTransferenciaParams,
+    opts?: CallOptions,
+  ): Promise<OperacionFecredResult> {
+    return this.fecred.modificarOpcionTransferencia(this.auth(opts), params, opts);
+  }
+
+  /** Informa una factura a un Agente de Depósito Colectivo. */
+  informarFacturaAgtDptoCltv(
+    params: InformarFacturaAgtDptoCltvParams,
+    opts?: CallOptions,
+  ): Promise<OperacionFecredResult> {
+    return this.fecred.informarFacturaAgtDptoCltv(this.auth(opts), params, opts);
+  }
+
+  // =========================================================================
+  // Agente de Depósito Colectivo
+  // =========================================================================
+
+  /** Cuentas de la CUIT representada en Agentes de Depósito Colectivo. */
+  consultarCuentasEnAgtDptoCltv(opts?: CallOptions): Promise<ConsultarCuentasEnAgtDptoCltvResult> {
+    return this.fecred.consultarCuentasEnAgtDptoCltv(this.auth(opts), opts);
+  }
+
+  /** Facturas informadas a Agentes de Depósito Colectivo. */
+  consultarFacturasAgtDptoCltv(
+    params?: ConsultarFacturasAgtDptoCltvParams,
+    opts?: CallOptions,
+  ): Promise<ConsultarFacturasAgtDptoCltvResult> {
+    return this.fecred.consultarFacturasAgtDptoCltv(this.auth(opts), params, opts);
+  }
+
+  // =========================================================================
+  // Tablas de parámetros
+  // =========================================================================
+
+  /** Tipos de retenciones (jurisdicción y porcentaje). */
+  consultarTiposRetenciones(opts?: CallOptions): Promise<TipoRetencion[]> {
+    return this.fecred.consultarTiposRetenciones(this.auth(opts), opts);
+  }
+
+  /** Formas de cancelación (para `aceptarFECred` / `informarCancelacionTotalFECred`). */
+  consultarTiposFormasCancelacion(opts?: CallOptions): Promise<CodigoDescripcion[]> {
+    return this.fecred.consultarTiposFormasCancelacion(this.auth(opts), opts);
+  }
+
+  /** Motivos de rechazo (para `rechazarFECred` / `rechazarNotaDC`). */
+  consultarTiposMotivosRechazo(opts?: CallOptions): Promise<CodigoDescripcion[]> {
+    return this.fecred.consultarTiposMotivosRechazo(this.auth(opts), opts);
+  }
+
+  /** Tipos de ajustes de operación (para `aceptarFECred`). */
+  consultarTiposAjustesOperacion(opts?: CallOptions): Promise<CodigoDescripcion[]> {
+    return this.fecred.consultarTiposAjustesOperacion(this.auth(opts), opts);
+  }
+
+  // =========================================================================
+  // Tickets
+  // =========================================================================
+
+  /** Descarta el Ticket de Acceso de WSFECRED (memoria y `ticketStorage`). */
+  clearAuthCache(): Promise<void> {
+    return this.wsaa.clearTicket(ENDPOINTS.wsfecred.serviceId);
+  }
+
+  /** Credenciales diferidas: el cliente las pide después de validar los parámetros. */
+  private auth(opts?: CallOptions): () => Promise<WsAuth> {
+    return async () => {
+      const ticket = await this.wsaa.getAccessTicket(ENDPOINTS.wsfecred.serviceId, opts);
+      return { token: ticket.token, sign: ticket.sign, cuitRepresentada: this.cuit };
     };
-  }
-
-  /**
-   * Query current accounts from FCE activity.
-   * Authenticates automatically via WSAA.
-   *
-   * @param params - Query filters (role, CUITs, date range)
-   * @returns Array of current account records
-   */
-  async consultarCtasCtes(params: ConsultarCtasCtesParams): Promise<CtaCte[]> {
-    validateConsultaCtasCtes(params);
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarCtasCtes(auth, {
-      rol: params.rol,
-      cuitEmisor: params.cuitEmisor,
-      cuitReceptor: params.cuitReceptor,
-      fechaDesde: params.fechaDesde,
-      fechaHasta: params.fechaHasta,
-    });
-
-    const ctasCtes = result['arrayCtasCtes'] ?? result['CtasCtes'] ?? result['ctasCtes'];
-    if (!ctasCtes) return [];
-
-    const ctasCtesObj = ctasCtes as Record<string, unknown>;
-    const items = ensureArray(
-      ctasCtesObj['CtaCte'] ?? ctasCtesObj['ctaCte'] ?? ctasCtesObj,
-    );
-
-    return items.map((item) => this.parseCtaCte(item as Record<string, unknown>));
-  }
-
-  /**
-   * Search FCE invoices by filters.
-   * Authenticates automatically via WSAA.
-   *
-   * @param params - Query filters
-   * @returns Array of FCE invoice records
-   */
-  async consultarComprobantes(params: ConsultarComprobantesParams): Promise<ComprobanteFecred[]> {
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarComprobantes(auth, {
-      cuitEmisor: params.cuitEmisor,
-      cuitReceptor: params.cuitReceptor,
-      codCtaCte: params.codCtaCte,
-      fechaDesde: params.fechaDesde,
-      fechaHasta: params.fechaHasta,
-    });
-
-    const comprobantes = result['arrayComprobantes'] ?? result['Comprobantes'] ?? result['comprobantes'];
-    if (!comprobantes) return [];
-
-    const compObj = comprobantes as Record<string, unknown>;
-    const items = ensureArray(
-      compObj['Comprobante'] ?? compObj['comprobante'] ?? compObj,
-    );
-
-    return items.map((item) => this.parseComprobante(item as Record<string, unknown>));
-  }
-
-  // =========================================================================
-  // Acciones sobre FCE
-  // =========================================================================
-
-  /**
-   * Accept an FCE (Factura de Credito Electronica).
-   * Authenticates automatically via WSAA.
-   *
-   * @param codCtaCte - Current account code of the FCE to accept
-   * @returns Result of the acceptance operation
-   */
-  async aceptarFECred(codCtaCte: number): Promise<AceptarFecredResult> {
-    validateCodCtaCte(codCtaCte);
-    const auth = await this.getAuth();
-    const result = await this.fecred.aceptarFECred(auth, codCtaCte);
-
-    return {
-      codCtaCte,
-      resultado: (result['resultado'] ?? result['Resultado'] ?? '') as string,
-      raw: result,
-    };
-  }
-
-  /**
-   * Reject an FCE (Factura de Credito Electronica).
-   * Authenticates automatically via WSAA.
-   *
-   * @param codCtaCte - Current account code of the FCE to reject
-   * @param codMotivoRechazo - Rejection reason code (use MotivoRechazo enum)
-   * @returns Result of the rejection operation
-   */
-  async rechazarFECred(codCtaCte: number, codMotivoRechazo: number): Promise<RechazarFecredResult> {
-    validateCodCtaCte(codCtaCte);
-    const auth = await this.getAuth();
-    const result = await this.fecred.rechazarFECred(auth, codCtaCte, codMotivoRechazo);
-
-    return {
-      codCtaCte,
-      resultado: (result['resultado'] ?? result['Resultado'] ?? '') as string,
-      raw: result,
-    };
-  }
-
-  /**
-   * Inform that an accepted FCE was paid/cancelled.
-   * Authenticates automatically via WSAA.
-   *
-   * @param params - Cancellation details (account code, payment method, optional observations)
-   * @returns Result of the cancellation notification
-   */
-  async informarFacturaAceptadaCancelada(params: InformarCanceladaParams): Promise<InformarCanceladaResult> {
-    validateCodCtaCte(params.codCtaCte);
-    const auth = await this.getAuth();
-    const result = await this.fecred.informarFacturaAceptadaCancelada(auth, {
-      codCtaCte: params.codCtaCte,
-      codFormaCancelacion: params.codFormaCancelacion,
-      observaciones: params.observaciones,
-    });
-
-    return {
-      codCtaCte: params.codCtaCte,
-      resultado: (result['resultado'] ?? result['Resultado'] ?? '') as string,
-      raw: result,
-    };
-  }
-
-  // =========================================================================
-  // Consultas de parametros
-  // =========================================================================
-
-  /**
-   * Query available retention types.
-   * Authenticates automatically via WSAA.
-   */
-  async consultarTiposRetenciones(): Promise<TipoRetencionItem[]> {
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarTiposRetenciones(auth);
-    return this.parseParamArray<TipoRetencionItem>(
-      result,
-      ['arrayTiposRetenciones', 'TiposRetenciones', 'tiposRetenciones'],
-      ['TipoRetencion', 'tipoRetencion'],
-      (item) => ({
-        codTipoRetencion: Number(item['codTipoRetencion'] ?? item['CodTipoRetencion'] ?? 0),
-        descTipoRetencion: (item['descTipoRetencion'] ?? item['DescTipoRetencion'] ?? '') as string,
-      }),
-    );
-  }
-
-  /**
-   * Query available payment method types for cancelling accepted FCE.
-   * Authenticates automatically via WSAA.
-   */
-  async consultarTiposFormasCancelacion(): Promise<TipoFormaCancelacionItem[]> {
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarTiposFormasCancelacion(auth);
-    return this.parseParamArray<TipoFormaCancelacionItem>(
-      result,
-      ['arrayTiposFormasCancelacion', 'TiposFormasCancelacion', 'tiposFormasCancelacion'],
-      ['TipoFormaCancelacion', 'tipoFormaCancelacion'],
-      (item) => ({
-        codFormaCancelacion: Number(item['codFormaCancelacion'] ?? item['CodFormaCancelacion'] ?? 0),
-        descFormaCancelacion: (item['descFormaCancelacion'] ?? item['DescFormaCancelacion'] ?? '') as string,
-      }),
-    );
-  }
-
-  /**
-   * Query available operation adjustment types.
-   * Authenticates automatically via WSAA.
-   */
-  async consultarTiposAjustesOperacion(): Promise<TipoAjusteOperacionItem[]> {
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarTiposAjustesOperacion(auth);
-    return this.parseParamArray<TipoAjusteOperacionItem>(
-      result,
-      ['arrayTiposAjustesOperacion', 'TiposAjustesOperacion', 'tiposAjustesOperacion'],
-      ['TipoAjusteOperacion', 'tipoAjusteOperacion'],
-      (item) => ({
-        codTipoAjuste: Number(item['codTipoAjuste'] ?? item['CodTipoAjuste'] ?? 0),
-        descTipoAjuste: (item['descTipoAjuste'] ?? item['DescTipoAjuste'] ?? '') as string,
-      }),
-    );
-  }
-
-  /**
-   * Query available rejection reason types.
-   * Authenticates automatically via WSAA.
-   */
-  async consultarTiposMotivoRechazo(): Promise<TipoMotivoRechazoItem[]> {
-    const auth = await this.getAuth();
-    const result = await this.fecred.consultarTiposMotivoRechazo(auth);
-    return this.parseParamArray<TipoMotivoRechazoItem>(
-      result,
-      ['arrayTiposMotivoRechazo', 'TiposMotivoRechazo', 'tiposMotivoRechazo'],
-      ['TipoMotivoRechazo', 'tipoMotivoRechazo'],
-      (item) => ({
-        codMotivoRechazo: Number(item['codMotivoRechazo'] ?? item['CodMotivoRechazo'] ?? 0),
-        descMotivoRechazo: (item['descMotivoRechazo'] ?? item['DescMotivoRechazo'] ?? '') as string,
-      }),
-    );
-  }
-
-  // =========================================================================
-  // Cache management
-  // =========================================================================
-
-  /** Invalidate the cached WSAA access ticket for WSFECRED. */
-  clearAuthCache(): void {
-    this.wsaa.clearTicket(ENDPOINTS.wsfecred.serviceId);
-  }
-
-  // =========================================================================
-  // Private helpers
-  // =========================================================================
-
-  private async getAuth(): Promise<WsAuth> {
-    const ticket = await this.wsaa.getAccessTicket(ENDPOINTS.wsfecred.serviceId);
-    return {
-      Token: ticket.token,
-      Sign: ticket.sign,
-      Cuit: this.cuit,
-    };
-  }
-
-  private parseCtaCte(item: Record<string, unknown>): CtaCte {
-    return {
-      codCtaCte: Number(item['codCtaCte'] ?? item['CodCtaCte'] ?? 0),
-      cuitEmisor: String(item['cuitEmisor'] ?? item['CUITEmisor'] ?? item['CuitEmisor'] ?? ''),
-      denominacionEmisor: (item['denominacionEmisor'] ?? item['DenominacionEmisor']) as string | undefined,
-      cuitReceptor: String(item['cuitReceptor'] ?? item['CUITReceptor'] ?? item['CuitReceptor'] ?? ''),
-      denominacionReceptor: (item['denominacionReceptor'] ?? item['DenominacionReceptor']) as string | undefined,
-      tipoComprobante: item['tipoComprobante'] != null ? Number(item['tipoComprobante'] ?? item['TipoComprobante']) : undefined,
-      puntoVenta: item['puntoVenta'] != null ? Number(item['puntoVenta'] ?? item['PuntoVenta']) : undefined,
-      nroComprobante: item['nroComprobante'] != null ? Number(item['nroComprobante'] ?? item['NroComprobante']) : undefined,
-      codMoneda: (item['codMoneda'] ?? item['CodMoneda']) as string | undefined,
-      importeTotal: item['importeTotal'] != null ? Number(item['importeTotal'] ?? item['ImporteTotal']) : undefined,
-      saldo: item['saldo'] != null ? Number(item['saldo'] ?? item['Saldo']) : undefined,
-      estado: (item['estado'] ?? item['Estado']) as string | undefined,
-      fechaEmision: (item['fechaEmision'] ?? item['FechaEmision']) as string | undefined,
-      fechaVencimientoPago: (item['fechaVencimientoPago'] ?? item['FechaVencimientoPago']) as string | undefined,
-      fechaVencimientoAceptacion: (item['fechaVencimientoAceptacion'] ?? item['FechaVencimientoAceptacion']) as string | undefined,
-      cae: (item['cae'] ?? item['CAE']) as string | undefined,
-      raw: item,
-    };
-  }
-
-  private parseComprobante(item: Record<string, unknown>): ComprobanteFecred {
-    const retenciones = item['retenciones'] ?? item['Retenciones'];
-    let parsedRetenciones: ComprobanteFecred['retenciones'] | undefined;
-
-    if (retenciones) {
-      const retObj = retenciones as Record<string, unknown>;
-      const retItems = ensureArray(
-        retObj['Retencion'] ?? retObj['retencion'] ?? retObj,
-      );
-      parsedRetenciones = retItems.map((r) => {
-        const ret = r as Record<string, unknown>;
-        return {
-          codTipoRetencion: Number(ret['codTipoRetencion'] ?? ret['CodTipoRetencion'] ?? 0),
-          descTipoRetencion: (ret['descTipoRetencion'] ?? ret['DescTipoRetencion']) as string | undefined,
-          importeRetencion: Number(ret['importeRetencion'] ?? ret['ImporteRetencion'] ?? 0),
-          porcentajeRetencion: ret['porcentajeRetencion'] != null
-            ? Number(ret['porcentajeRetencion'] ?? ret['PorcentajeRetencion'])
-            : undefined,
-        };
-      });
-    }
-
-    return {
-      codCtaCte: Number(item['codCtaCte'] ?? item['CodCtaCte'] ?? 0),
-      tipoComprobante: item['tipoComprobante'] != null ? Number(item['tipoComprobante'] ?? item['TipoComprobante']) : undefined,
-      puntoVenta: item['puntoVenta'] != null ? Number(item['puntoVenta'] ?? item['PuntoVenta']) : undefined,
-      nroComprobante: item['nroComprobante'] != null ? Number(item['nroComprobante'] ?? item['NroComprobante']) : undefined,
-      cuitEmisor: String(item['cuitEmisor'] ?? item['CUITEmisor'] ?? item['CuitEmisor'] ?? ''),
-      denominacionEmisor: (item['denominacionEmisor'] ?? item['DenominacionEmisor']) as string | undefined,
-      cuitReceptor: String(item['cuitReceptor'] ?? item['CUITReceptor'] ?? item['CuitReceptor'] ?? ''),
-      denominacionReceptor: (item['denominacionReceptor'] ?? item['DenominacionReceptor']) as string | undefined,
-      codMoneda: (item['codMoneda'] ?? item['CodMoneda']) as string | undefined,
-      importeTotal: item['importeTotal'] != null ? Number(item['importeTotal'] ?? item['ImporteTotal']) : undefined,
-      importeNeto: item['importeNeto'] != null ? Number(item['importeNeto'] ?? item['ImporteNeto']) : undefined,
-      saldo: item['saldo'] != null ? Number(item['saldo'] ?? item['Saldo']) : undefined,
-      estado: (item['estado'] ?? item['Estado']) as string | undefined,
-      fechaEmision: (item['fechaEmision'] ?? item['FechaEmision']) as string | undefined,
-      fechaVencimientoPago: (item['fechaVencimientoPago'] ?? item['FechaVencimientoPago']) as string | undefined,
-      cae: (item['cae'] ?? item['CAE']) as string | undefined,
-      retenciones: parsedRetenciones,
-      raw: item,
-    };
-  }
-
-  /**
-   * Generic parser for parameter arrays from WSFECRED responses.
-   * Handles varying SOAP response structures (different key names, namespaces).
-   */
-  private parseParamArray<T>(
-    result: Record<string, unknown>,
-    containerKeys: string[],
-    itemKeys: string[],
-    mapper: (item: Record<string, unknown>) => T,
-  ): T[] {
-    let container: unknown;
-    for (const key of containerKeys) {
-      if (result[key] !== undefined) {
-        container = result[key];
-        break;
-      }
-    }
-    if (!container) return [];
-
-    const containerObj = container as Record<string, unknown>;
-    let items: unknown[] = [];
-    for (const key of itemKeys) {
-      if (containerObj[key] !== undefined) {
-        items = ensureArray(containerObj[key]);
-        break;
-      }
-    }
-    if (items.length === 0) {
-      items = ensureArray(containerObj);
-    }
-
-    return items.map((item) => mapper(item as Record<string, unknown>));
   }
 }

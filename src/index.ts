@@ -1,71 +1,44 @@
-// Main class
+// Clientes
 export { ArcaFecred } from './arca-fecred.js';
-
-// Low-level client
 export { FecredClient } from './fecred-client.js';
-export type { FecredClientConfig } from './fecred-client.js';
+export type { FecredClientConfig, WsAuthSource } from './fecred-client.js';
 
-// Error classes (from common)
+// Constantes y enumeraciones del XSD
+export {
+  ENDPOINTS,
+  RolCtaCte,
+  EstadoCtaCte,
+  EstadoComprobante,
+  TipoFechaFiltro,
+  OpcionTransferencia,
+  TipoCancelacion,
+  TipoAceptacion,
+  Resultado,
+} from './constants.js';
+export type { TipoCodAutorizacion } from './constants.js';
+
+// Tipos
+export type * from './types.js';
+
+// Errores y utilidades de common que aparecen en la API pública
 export {
   ArcaError,
   ArcaAuthError,
   ArcaSoapError,
   ArcaServiceError,
+  ArcaValidationError,
+  ArcaTicketVigenteError,
+  WsaaClient,
+  MemoryTicketStorage,
+  FileTicketStorage,
 } from '@ramiidv/arca-common';
-
-// WSAA client (from common)
-export { WsaaClient } from '@ramiidv/arca-common';
-export type { WsaaClientConfig } from '@ramiidv/arca-common';
-
-// Types
 export type {
-  ArcaFecredConfig,
-  WsAuth,
-  AccessTicket,
+  ArcaBaseConfig,
   ArcaEvent,
+  AccessTicket,
+  CallOptions,
   ServerStatus,
-  SoapCallOptions,
-  MontoObligadoResult,
-  CtaCte,
-  ComprobanteFecred,
-  ConsultarCtasCtesParams,
-  ConsultarComprobantesParams,
-  AceptarFecredResult,
-  RechazarFecredResult,
-  InformarCanceladaParams,
-  InformarCanceladaResult,
-  RetencionFecred,
-  TipoRetencionItem,
-  TipoFormaCancelacionItem,
-  TipoAjusteOperacionItem,
-  TipoMotivoRechazoItem,
-  WsFecredError,
-} from './types.js';
-
-// Constants and enums
-export {
-  ENDPOINTS,
-  RolCtaCte,
-  EstadoCtaCte,
-  MotivoRechazo,
-  FormaCancelacion,
-  TipoAjusteOperacion,
-  TipoRetencion,
-} from './constants.js';
-
-// Validation
-export {
-  validateCuit,
-  validateCodCtaCte,
-  validateConsultaCtasCtes,
-} from './validation.js';
-export { ArcaValidationError } from '@ramiidv/arca-common';
-export type { ValidationErrorDetail } from '@ramiidv/arca-common';
-
-// Utilities (from common)
-export {
-  ensureArray,
-  parseXml,
-  buildXml,
-  checkServiceErrors,
+  ServiceErrorDetail,
+  TicketStorage,
+  ValidationErrorDetail,
 } from '@ramiidv/arca-common';

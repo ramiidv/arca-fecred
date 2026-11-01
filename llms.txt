@@ -1,173 +1,96 @@
 # @ramiidv/arca-fecred
 
-> TypeScript SDK para el web service WSFECRED de ARCA (ex AFIP) - Factura de Credito Electronica MiPyME (Ley 27440)
+> TypeScript SDK para el web service WSFECRED (FECredService) de ARCA (ex AFIP) - Factura de Crédito Electrónica MiPyME (Ley 27.440). Cubre todas las operaciones del WSDL.
 
-## Instalacion
+## Instalación
 
 ```bash
 npm install @ramiidv/arca-fecred
 ```
 
-Requisitos: Node.js >= 18 (fetch nativo). ESM only.
+Node.js >= 18. ESM only. Depende de @ramiidv/arca-common ^0.4.0.
 
-## Configuracion
+## Configuración
 
 ```typescript
-import { ArcaFecred } from '@ramiidv/arca-fecred';
+import { ArcaFecred, FileTicketStorage } from '@ramiidv/arca-fecred';
 
 const fecred = new ArcaFecred({
-  cert: string,          // PEM X.509 certificate
-  key: string,           // PEM RSA private key
-  cuit: string,          // CUIT representada (ej: "20123456789")
-  production?: boolean,  // default: false (homologacion)
-  timeout?: number,      // default: 30000
-  retries?: number,      // default: 1
-  retryDelayMs?: number, // default: 1000
-  onEvent?: (event: ArcaEvent) => void,
+  cert: string,                 // PEM
+  key: string,                  // PEM
+  cuit: number | string,        // CUIT representada (se valida dígito verificador)
+  production?: boolean,         // default false (homologación)
+  timeout?: number, retries?: number, retryDelayMs?: number,
+  ticketStorage?: TicketStorage, // recomendado: new FileTicketStorage('./.arca-tickets')
+  fetch?: typeof fetch, legacyTls?: 'auto' | 'never' | 'always',
+  onEvent?: (e: ArcaEvent) => void,
+  wsaa?: WsaaClient,            // compartir WSAA entre SDKs
+  endpoints?: { wsfecred?: string; wsaa?: string },
 });
 ```
 
-## Metodos principales
+Todos los métodos aceptan `opts?: { signal?: AbortSignal }` como último parámetro.
 
-### consultarMontoObligadoRecepcion(cuit: string): Promise<MontoObligadoResult>
-Verifica si una CUIT esta obligada a recibir FCE. Retorna: { cuitConsultada, obligado: boolean, montoDesde?: number, raw }.
-
-### consultarCtasCtes(params: ConsultarCtasCtesParams): Promise<CtaCte[]>
-Consulta cuentas corrientes de actividad FCE. Params: { rol: "Emisor"|"Receptor", cuitEmisor?, cuitReceptor?, fechaDesde, fechaHasta }. Retorna array de CtaCte.
-
-### consultarComprobantes(params: ConsultarComprobantesParams): Promise<ComprobanteFecred[]>
-Busca comprobantes FCE. Params: { cuitEmisor?, cuitReceptor?, codCtaCte?, fechaDesde?, fechaHasta? }. Retorna array de ComprobanteFecred.
-
-### aceptarFECred(codCtaCte: number): Promise<AceptarFecredResult>
-Acepta una FCE. Retorna: { codCtaCte, resultado, raw }.
-
-### rechazarFECred(codCtaCte: number, codMotivoRechazo: number): Promise<RechazarFecredResult>
-Rechaza una FCE. Usar MotivoRechazo enum para codMotivoRechazo. Retorna: { codCtaCte, resultado, raw }.
-
-### informarFacturaAceptadaCancelada(params: InformarCanceladaParams): Promise<InformarCanceladaResult>
-Informa que una FCE aceptada fue pagada. Params: { codCtaCte, codFormaCancelacion, observaciones? }. Usar FormaCancelacion enum.
-
-### consultarTiposRetenciones(): Promise<TipoRetencionItem[]>
-Tipos de retenciones disponibles. Retorna: { codTipoRetencion, descTipoRetencion }[].
-
-### consultarTiposFormasCancelacion(): Promise<TipoFormaCancelacionItem[]>
-Formas de cancelacion disponibles. Retorna: { codFormaCancelacion, descFormaCancelacion }[].
-
-### consultarTiposAjustesOperacion(): Promise<TipoAjusteOperacionItem[]>
-Tipos de ajustes de operacion. Retorna: { codTipoAjuste, descTipoAjuste }[].
-
-### consultarTiposMotivoRechazo(): Promise<TipoMotivoRechazoItem[]>
-Motivos de rechazo disponibles. Retorna: { codMotivoRechazo, descMotivoRechazo }[].
-
-### status(): Promise<ServerStatus>
-Health check. No requiere autenticacion. Retorna: { appserver, dbserver, authserver }.
-
-### clearAuthCache(): void
-Invalida el ticket de acceso cacheado para WSFECRED.
-
-## Tipos principales
+## Tipos de entrada clave
 
 ```typescript
-interface CtaCte {
-  codCtaCte: number;
-  cuitEmisor: string;
-  denominacionEmisor?: string;
-  cuitReceptor: string;
-  denominacionReceptor?: string;
-  tipoComprobante?: number;
-  puntoVenta?: number;
-  nroComprobante?: number;
-  codMoneda?: string;
-  importeTotal?: number;
-  saldo?: number;
-  estado?: string;
-  fechaEmision?: string;
-  fechaVencimientoPago?: string;
-  fechaVencimientoAceptacion?: string;
-  cae?: string;
-}
+type IdCtaCteInput = { codCtaCte: number | string } | { idFactura: IdComprobanteInput };
+interface IdComprobanteInput { cuitEmisor: number | string; codTipoCmp: number; ptoVta: number; nroCmp: number }
+interface FiltroFecha { tipo: 'Emision' | 'PuestaDispo' | 'VenPago' | 'VenAcep' | 'Acep' | 'InfoAgDptoCltv'; desde: Date | string; hasta: Date | string }
+interface MotivoRechazo { codMotivo: number; descMotivo: string; justificacion: string } // textos 3..250
+```
 
-interface ComprobanteFecred {
-  codCtaCte: number;
-  tipoComprobante?: number;
-  puntoVenta?: number;
-  nroComprobante?: number;
-  cuitEmisor: string;
-  cuitReceptor: string;
-  codMoneda?: string;
-  importeTotal?: number;
-  importeNeto?: number;
-  saldo?: number;
-  estado?: string;
-  fechaEmision?: string;
-  fechaVencimientoPago?: string;
-  cae?: string;
-  retenciones?: RetencionFecred[];
-}
+Fechas: `Date`, `'YYYY-MM-DD'` o `'YYYYMMDD'`. Importes: number finito, se redondean a 2 decimales.
 
-interface MontoObligadoResult {
-  cuitConsultada: string;
-  obligado: boolean;
-  montoDesde?: number;
-  raw: Record<string, unknown>;
-}
+## Consultas
 
-interface ServerStatus {
-  appserver: string;
-  dbserver: string;
-  authserver: string;
-}
+```typescript
+await fecred.status(); // dummy → { appserver, dbserver, authserver }
+await fecred.consultarMontoObligadoRecepcion({ cuitConsultada, fechaEmision }); // { obligado: boolean, montoDesde?, observaciones }
+await fecred.consultarObligadoRecepcion(cuit);           // { obligado: boolean, desde?, observaciones }
+await fecred.consultarCtasCtes({ rol: 'Emisor' | 'Receptor', cuitContraparte?, fecha?, estadoCtaCte?, nroPagina?, opcionTransferencia? });
+// → { ctasCtes: { codCtaCte, estadoCtaCte: { estado, fechaHoraEstado }, idFacturaCredito, importeTotalFC, saldo, saldoAceptado?, codMoneda, opcionTransferencia }[], nroPagina?, hayMas? }
+await fecred.consultarCtaCte(idCtaCte);                  // { ctaCte: CuentaCorriente }
+await fecred.consultarComprobantes({ rol, cuitContraparte?, codTipoCmp?, estadoCmp?, fecha?, codCtaCte?, estadoCtaCte?, nroPagina? });
+// → { comprobantes: Comprobante[] (cuitEmisor, razonSocialEmi, codTipoCmp, ptoVta, nroCmp, codAutorizacion, fechaEmision, fechaVenPago?, importeTotal, estado: { estado, fechaHoraEstado }, ...), hayMas? }
+await fecred.consultarHistorialEstadosComprobante(idComprobante);
+await fecred.consultarHistorialEstadosCtaCte(idCtaCte);
+await fecred.obtenerRemitos(idComprobante);
+await fecred.consultarCuentasEnAgtDptoCltv();
+await fecred.consultarFacturasAgtDptoCltv({ idCtaCte?, fecha? });
+await fecred.consultarTiposRetenciones();       // { codigoJurisdiccion, descripcionJurisdiccion, porcentajeRetencion }[]
+await fecred.consultarTiposFormasCancelacion(); // { codigo, descripcion }[]
+await fecred.consultarTiposMotivosRechazo();    // { codigo, descripcion }[]
+await fecred.consultarTiposAjustesOperacion();  // { codigo, descripcion }[]
+```
+
+## Operaciones (no idempotentes, nunca se reintentan)
+
+```typescript
+await fecred.aceptarFECred({
+  idCtaCte, saldoAceptado, codMoneda, cotizacionMonedaUlt,
+  confirmarNotasDC?, formasCancelacion?, retenciones?, ajustesOperacion?, tipoCancelacion?: 'PAR' | 'TOT',
+  importeCancelado?, importeTotalRetPesos?, importeEmbargoPesos?, informaCBU?: boolean, cbuComprador?,
+});
+await fecred.rechazarFECred({ idCtaCte, motivos: MotivoRechazo[] });
+await fecred.informarCancelacionTotalFECred({ idCtaCte, formasCancelacion: { codigo, descripcion }[], importeCancelacion });
+await fecred.rechazarNotaDC({ idComprobante, motivos });
+await fecred.modificarOpcionTransferencia({ idCtaCte, opcionTransferencia: 'SCA' | 'ADC' });
+await fecred.informarFacturaAgtDptoCltv({ idCtaCte, ctaAgente: { cuitAgente, idCuenta, razonSocialAgente?, denominacion? } });
+// → { resultado: 'A' | 'O', idCtaCte, evento?, observaciones }
 ```
 
 ## Errores
 
-3-class hierarchy from @ramiidv/arca-common:
-- ArcaError: base class
-- ArcaAuthError: WSAA authentication failures
-- ArcaServiceError: business errors from WSFECRED (has errors: {code: number, msg: string}[])
-- ArcaSoapError: HTTP/transport errors (has statusCode?: number)
+- `ArcaValidationError`: parámetros inválidos (antes de pedir ticket o llamar a ARCA). `field`, `details`.
+- `ArcaServiceError`: `arrayErrores` / `arrayErroresFormato` o `resultado = 'R'`. `errors: { code, msg, rawCode? }[]`.
+- `ArcaSoapError`: HTTP / timeout / SOAP Fault / respuesta sin campo obligatorio. `uncertain = true` en una operación: pudo haberse registrado → verificar con `consultarCtaCte` o `consultarHistorialEstadosCtaCte` antes de reintentar.
+- `ArcaAuthError`, `ArcaTicketVigenteError`: WSAA.
 
-```typescript
-import { ArcaAuthError, ArcaServiceError, ArcaSoapError } from '@ramiidv/arca-fecred';
+## Notas
 
-try {
-  await fecred.aceptarFECred(codCtaCte);
-} catch (error) {
-  if (error instanceof ArcaAuthError) { /* auth failure */ }
-  if (error instanceof ArcaServiceError) { /* business error, check error.errors */ }
-  if (error instanceof ArcaSoapError) { /* HTTP/network error, check error.statusCode */ }
-}
-```
-
-## Eventos
-
-Discriminated union types: auth:login, auth:cache-hit, request:start, request:end, request:retry, request:error.
-
-## Enums
-
-- RolCtaCte (EMISOR="Emisor", RECEPTOR="Receptor")
-- EstadoCtaCte (PENDIENTE_ACEPTACION, ACEPTADA, RECHAZADA, CANCELADA, ANULADA)
-- MotivoRechazo (NOTA_CREDITO_DEBITO=1, CUIT_INCORRECTO=2, FECHA_INCORRECTA=3, CBU_INCORRECTO=4, OTROS=5)
-- FormaCancelacion (ACREDITACION_CUENTA=1, TRANSFERENCIA=2, CHEQUE=3, PAGO_ELECTRONICO=4, COMPENSACION=5, ENDOSO=6, OTRO=99)
-- TipoAjusteOperacion (NOTA_CREDITO=1, NOTA_DEBITO=2)
-- TipoRetencion (GANANCIAS=1, IVA=2, SUSS=3, INGRESOS_BRUTOS=4, OTRAS=99)
-
-## Clientes de bajo nivel
-
-Accesibles como propiedades publicas: fecred.wsaa, fecred.fecred.
-
-## SOAP details
-
-- WSAA service ID: "wsfecred"
-- Production endpoint: https://serviciosjava.afip.gob.ar/wsfecred/FECredService
-- Homologation endpoint: https://fwshomo.afip.gob.ar/wsfecred/FECredService
-- Namespace: https://serviciosjava.afip.gob.ar/wsfecred/FECredService?wsdl
-- Uses ser: prefix (Java-based, like padron services)
-- Auth passed as authRequest: { Token, Sign, Cuit }
-
-## Utilidades re-exportadas de arca-common
-
-- ensureArray<T>(value): T[] - normaliza single/array SOAP responses
-- parseXml(xml): Record<string, unknown> - parse XML
-- buildXml(obj): string - build XML from object
-- checkServiceErrors(result, serviceName): void - throws ArcaServiceError if errors found
+- Los códigos de formas de cancelación, motivos de rechazo, ajustes y retenciones salen de `consultarTipos*()`; no hay enums.
+- Enums del XSD (objeto + tipo literal): `RolCtaCte`, `EstadoCtaCte`, `EstadoComprobante`, `TipoFechaFiltro`, `OpcionTransferencia`, `TipoCancelacion`, `TipoAceptacion`, `Resultado`.
+- `codCtaCte`, CUITs y `codAutorizacion` se devuelven como string; importes como number; S/N como boolean.
+- Cliente de bajo nivel: `fecred.fecred` (`FecredClient`), con `{ token, sign, cuitRepresentada }` como primer parámetro.
+- Endpoints: homologación `https://fwshomo.afip.gob.ar/wsfecred/FECredService`, producción `https://serviciosjava.afip.gob.ar/wsfecred/FECredService`. Namespace `http://ar.gob.afip.wsfecred/FECredService/`; SOAPAction = namespace + operación.

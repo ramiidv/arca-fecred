@@ -1,35 +1,35 @@
 /**
- * Ejemplo: Consultar si una CUIT esta obligada a recibir FCE
- *
- * Verifica si un contribuyente esta obligado a recibir Facturas de
- * Credito Electronica (FCE) segun la Ley 27440 (regimen MiPyME).
+ * Ejemplo: ¿la CUIT receptora está obligada a recibir Factura de Crédito Electrónica?
  */
 
 import fs from "fs";
-import { ArcaFecred } from "@ramiidv/arca-fecred";
+import { ArcaFecred, FileTicketStorage } from "@ramiidv/arca-fecred";
 
 async function main() {
   const fecred = new ArcaFecred({
     cert: fs.readFileSync("./certs/certificado.crt", "utf-8"),
     key: fs.readFileSync("./certs/clave.key", "utf-8"),
-    cuit: "20123456789",
+    cuit: "20123456786",
     production: false,
+    ticketStorage: new FileTicketStorage("./.arca-tickets"),
   });
 
-  // Verificar el estado del servicio
-  const status = await fecred.status();
-  console.log("Estado del servicio:", status);
+  console.log(await fecred.status()); // { appserver: 'OK', dbserver: 'OK', authserver: 'OK' }
 
-  // Consultar si una CUIT esta obligada a recibir FCE
-  const cuitAConsultar = "30712345678";
-  const resultado = await fecred.consultarMontoObligadoRecepcion(cuitAConsultar);
-
-  console.log(`CUIT: ${resultado.cuitConsultada}`);
-  console.log(`Obligado: ${resultado.obligado}`);
-
-  if (resultado.obligado && resultado.montoDesde !== undefined) {
-    console.log(`Monto desde: $${resultado.montoDesde.toLocaleString("es-AR")}`);
+  // Para una fecha de emisión: si está obligada y desde qué monto
+  const monto = await fecred.consultarMontoObligadoRecepcion({
+    cuitConsultada: "30712345671",
+    fechaEmision: "2026-11-01",
+  });
+  if (monto.obligado) {
+    console.log(`Obligada a recibir FCE desde $${monto.montoDesde ?? "(monto no informado)"}`);
+  } else {
+    console.log("No obligada a recibir FCE");
   }
+
+  // Sin fecha: si está obligada y desde cuándo
+  const obligado = await fecred.consultarObligadoRecepcion("30712345671");
+  console.log(obligado.obligado, obligado.desde);
 }
 
 main().catch(console.error);

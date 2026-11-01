@@ -1,211 +1,282 @@
-import { ArcaValidationError } from '@ramiidv/arca-common';
-import type { ValidationErrorDetail } from '@ramiidv/arca-common';
-import type { ConsultarCtasCtesParams } from './types.js';
+import { ArcaValidationError, formatDate, validateCBU, validateCuit } from '@ramiidv/arca-common';
+import {
+  EstadoComprobante,
+  EstadoCtaCte,
+  OpcionTransferencia,
+  RolCtaCte,
+  TipoCancelacion,
+  TipoFechaFiltro,
+} from './constants.js';
+import type {
+  ConfirmarNotaDCInput,
+  CuentaEnAgenteInput,
+  FiltroFecha,
+  FormaCancelacionInput,
+  IdComprobanteInput,
+  IdCtaCteInput,
+  MotivoRechazo,
+  RetencionInput,
+  AjusteOperacion,
+} from './types.js';
 
-// ---------------------------------------------------------------------------
-// CUIT validation
-// ---------------------------------------------------------------------------
+// Validación local y armado de los fragmentos del request, según las
+// restricciones del XSD de FECredService. Todas las funciones lanzan
+// ArcaValidationError con el `field` del parámetro inválido.
 
-/**
- * Validates a CUIT value. Must be a positive number or a non-empty numeric string.
- * @param cuit - Value to validate
- * @param fieldName - Field name for error messages (default: "cuit")
- * @returns The CUIT as a string
- * @throws ArcaValidationError if the CUIT is invalid
- */
-export function validateCuit(cuit: unknown, fieldName = 'cuit'): string {
-  if (typeof cuit === 'number') {
-    if (!Number.isFinite(cuit) || cuit <= 0 || !Number.isInteger(cuit)) {
-      throw new ArcaValidationError(
-        `${fieldName} debe ser un numero entero positivo.`,
-        [{ field: fieldName, message: 'Debe ser un numero entero positivo', value: cuit }],
-        fieldName,
-      );
-    }
-    return String(cuit);
-  }
+type Xml = Record<string, unknown>;
 
-  if (typeof cuit === 'string') {
-    const trimmed = cuit.trim();
-    if (trimmed.length === 0) {
-      throw new ArcaValidationError(
-        `${fieldName} no puede estar vacio.`,
-        [{ field: fieldName, message: 'No puede estar vacio', value: cuit }],
-        fieldName,
-      );
-    }
-    // Allow formats: 20123456789 or 20-12345678-9
-    const normalized = trimmed.replace(/-/g, '');
-    if (!/^\d+$/.test(normalized)) {
-      throw new ArcaValidationError(
-        `${fieldName} debe contener solo digitos (opcionalmente separados por guiones).`,
-        [{ field: fieldName, message: 'Debe contener solo digitos', value: cuit }],
-        fieldName,
-      );
-    }
-    return trimmed;
-  }
-
-  throw new ArcaValidationError(
-    `${fieldName} debe ser un numero o string.`,
-    [{ field: fieldName, message: 'Debe ser un numero o string', value: cuit }],
-    fieldName,
-  );
+function invalid(field: string, message: string, value: unknown): never {
+  throw new ArcaValidationError(`${field}: ${message}`, [{ field, message, value }], field);
 }
 
-// ---------------------------------------------------------------------------
-// CodCtaCte validation
-// ---------------------------------------------------------------------------
-
-/**
- * Validates a CodCtaCte (current account code).
- * Must be a non-empty string or a positive number.
- * @param cod - Value to validate
- * @returns The code as a number
- * @throws ArcaValidationError if the code is invalid
- */
-export function validateCodCtaCte(cod: unknown): number {
-  if (typeof cod === 'number') {
-    if (!Number.isFinite(cod) || cod <= 0 || !Number.isInteger(cod)) {
-      throw new ArcaValidationError(
-        'codCtaCte debe ser un numero entero positivo.',
-        [{ field: 'codCtaCte', message: 'Debe ser un numero entero positivo', value: cod }],
-        'codCtaCte',
-      );
+function rethrowAs<T>(field: string, value: unknown, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof ArcaValidationError) {
+      const message = e.details[0]?.message ?? e.message;
+      throw new ArcaValidationError(`${field}: ${message}`, [{ field, message, value }], field, { cause: e });
     }
-    return cod;
-  }
-
-  if (typeof cod === 'string') {
-    const trimmed = cod.trim();
-    if (trimmed.length === 0) {
-      throw new ArcaValidationError(
-        'codCtaCte no puede estar vacio.',
-        [{ field: 'codCtaCte', message: 'No puede estar vacio', value: cod }],
-        'codCtaCte',
-      );
-    }
-    const num = Number(trimmed);
-    if (!Number.isFinite(num) || num <= 0 || !Number.isInteger(num)) {
-      throw new ArcaValidationError(
-        'codCtaCte debe ser un numero entero positivo.',
-        [{ field: 'codCtaCte', message: 'Debe ser un numero entero positivo', value: cod }],
-        'codCtaCte',
-      );
-    }
-    return num;
-  }
-
-  throw new ArcaValidationError(
-    'codCtaCte es requerido.',
-    [{ field: 'codCtaCte', message: 'Es requerido', value: cod }],
-    'codCtaCte',
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ConsultarCtasCtes params validation
-// ---------------------------------------------------------------------------
-
-/**
- * Validates parameters for consultarCtasCtes.
- * Requires rol, fechaDesde, fechaHasta, and at least one of CUITEmisor or CUITReceptor
- * (depending on the role).
- * @param params - Parameters to validate
- * @throws ArcaValidationError if required fields are missing or invalid
- */
-export function validateConsultaCtasCtes(params: ConsultarCtasCtesParams): void {
-  const errors: ValidationErrorDetail[] = [];
-
-  // Validate rol
-  if (!params.rol || typeof params.rol !== 'string' || params.rol.trim().length === 0) {
-    errors.push({
-      field: 'rol',
-      message: 'rol es requerido (debe ser "Emisor" o "Receptor")',
-      value: params.rol,
-    });
-  } else {
-    const rolNorm = params.rol.trim();
-    if (rolNorm !== 'Emisor' && rolNorm !== 'Receptor') {
-      errors.push({
-        field: 'rol',
-        message: 'rol debe ser "Emisor" o "Receptor"',
-        value: params.rol,
-      });
-    }
-  }
-
-  // Validate fechaDesde
-  if (!params.fechaDesde || typeof params.fechaDesde !== 'string' || params.fechaDesde.trim().length === 0) {
-    errors.push({
-      field: 'fechaDesde',
-      message: 'fechaDesde es requerido',
-      value: params.fechaDesde,
-    });
-  } else if (!isValidDateString(params.fechaDesde)) {
-    errors.push({
-      field: 'fechaDesde',
-      message: 'fechaDesde debe ser una fecha valida (YYYY-MM-DD)',
-      value: params.fechaDesde,
-    });
-  }
-
-  // Validate fechaHasta
-  if (!params.fechaHasta || typeof params.fechaHasta !== 'string' || params.fechaHasta.trim().length === 0) {
-    errors.push({
-      field: 'fechaHasta',
-      message: 'fechaHasta es requerido',
-      value: params.fechaHasta,
-    });
-  } else if (!isValidDateString(params.fechaHasta)) {
-    errors.push({
-      field: 'fechaHasta',
-      message: 'fechaHasta debe ser una fecha valida (YYYY-MM-DD)',
-      value: params.fechaHasta,
-    });
-  }
-
-  // Validate date range
-  if (params.fechaDesde && params.fechaHasta && isValidDateString(params.fechaDesde) && isValidDateString(params.fechaHasta)) {
-    if (params.fechaDesde > params.fechaHasta) {
-      errors.push({
-        field: 'fechaHasta',
-        message: 'fechaHasta debe ser igual o posterior a fechaDesde',
-        value: { fechaDesde: params.fechaDesde, fechaHasta: params.fechaHasta },
-      });
-    }
-  }
-
-  // Validate that at least one CUIT is present
-  const hasCuitEmisor = params.cuitEmisor != null && String(params.cuitEmisor).trim().length > 0;
-  const hasCuitReceptor = params.cuitReceptor != null && String(params.cuitReceptor).trim().length > 0;
-
-  if (!hasCuitEmisor && !hasCuitReceptor) {
-    // While the WS may accept queries without CUITs in some cases,
-    // at least one is typically needed depending on the role
-    // We allow it but do not error - the service will return its own error if needed
-  }
-
-  if (errors.length > 0) {
-    throw new ArcaValidationError(
-      `Parametros de consultarCtasCtes invalidos: ${errors.map((e) => e.message).join('; ')}`,
-      errors,
-    );
+    throw e;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+/** CUIT (`CuitSimpleType`) validado con dígito verificador, como 11 dígitos. */
+export function cuitParam(value: unknown, field: string): string {
+  if (typeof value !== 'string' && typeof value !== 'number') invalid(field, 'es requerido (number o string)', value);
+  return rethrowAs(field, value, () => validateCuit(value));
+}
+
+/** `xsd:date` (`YYYY-MM-DD`). Acepta `Date` (fecha de Argentina), `YYYY-MM-DD` o `YYYYMMDD`. */
+export function dateParam(value: unknown, field: string): string {
+  if (!(value instanceof Date) && typeof value !== 'string') invalid(field, 'es requerida (Date o string)', value);
+  const d = rethrowAs(field, value, () => formatDate(value));
+  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+}
+
+/** Entero dentro de un rango (`xsd:short`, `PuntoVentaSimpleType`, etc.). */
+export function intParam(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    invalid(field, `debe ser un entero entre ${min} y ${max}`, value);
+  }
+  return value;
+}
+
+const SHORT_MAX = 32767;
+
+/** Código `xsd:short` no negativo. */
+export function codeParam(value: unknown, field: string): number {
+  return intParam(value, field, 0, SHORT_MAX);
+}
+
+/** `xsd:long` positivo (ej: `codCtaCte`), como string de dígitos. */
+export function longParam(value: unknown, field: string): string {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value <= 0) invalid(field, 'debe ser un entero positivo', value);
+    return String(value);
+  }
+  if (typeof value === 'string' && /^\d{1,18}$/.test(value.trim()) && !/^0+$/.test(value.trim())) {
+    return value.trim().replace(/^0+/, '');
+  }
+  return invalid(field, 'debe ser un entero positivo', value);
+}
+
+const IMPORTE_MAX = 9999999999999.99;
 
 /**
- * Checks if a string is a valid YYYY-MM-DD date.
+ * `ImporteSimpleType`: decimal con 2 decimales (redondeado), entre
+ * -9999999999999.99 y 9999999999999.99. Con `allowNegative = false` rechaza negativos.
  */
-function isValidDateString(dateStr: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
-  const date = new Date(dateStr + 'T00:00:00Z');
-  if (isNaN(date.getTime())) return false;
-  // Verify the parsed date matches input (catches e.g. 2026-02-30)
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return date.getUTCFullYear() === y && date.getUTCMonth() + 1 === m && date.getUTCDate() === d;
+export function importeParam(value: unknown, field: string, allowNegative = false): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) invalid(field, 'debe ser un número finito', value);
+  const rounded = Math.round(value * 100) / 100;
+  if (Math.abs(rounded) > IMPORTE_MAX) invalid(field, 'excede el máximo del XSD (13 enteros, 2 decimales)', value);
+  if (!allowNegative && rounded < 0) invalid(field, 'no puede ser negativo', value);
+  return rounded.toFixed(2);
+}
+
+/** `PorcentajeSimpleType`: 0 a 100. */
+export function porcentajeParam(value: unknown, field: string): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    invalid(field, 'debe ser un número entre 0 y 100', value);
+  }
+  return String(Math.round(value * 100) / 100);
+}
+
+/** Cotización (`xsd:decimal`), positiva; se envía con hasta 6 decimales. */
+export function cotizacionParam(value: unknown, field: string): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    invalid(field, 'debe ser un número positivo', value);
+  }
+  return String(Math.round(value * 1e6) / 1e6);
+}
+
+/** String con longitud acotada (ej: `Texto250SimpleType` = 3..250). */
+export function textParam(value: unknown, field: string, min: number, max: number): string {
+  if (typeof value !== 'string') invalid(field, 'es requerido (string)', value);
+  const t = value.trim();
+  if (t.length < min || t.length > max) invalid(field, `debe tener entre ${min} y ${max} caracteres`, value);
+  return t;
+}
+
+/** `xsd:string` no vacío. */
+export function nonEmptyParam(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) invalid(field, 'es requerido (string no vacío)', value);
+  return value.trim();
+}
+
+/** Valor de una enumeración del XSD. */
+export function enumParam<T extends string>(value: unknown, field: string, values: Record<string, T>): T {
+  const allowed = Object.values(values);
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    invalid(field, `debe ser uno de: ${allowed.join(', ')}`, value);
+  }
+  return value as T;
+}
+
+export const rolParam = (v: unknown, field = 'rol') => enumParam(v, field, RolCtaCte);
+export const estadoCtaCteParam = (v: unknown, field = 'estadoCtaCte') => enumParam(v, field, EstadoCtaCte);
+export const estadoCmpParam = (v: unknown, field = 'estadoCmp') => enumParam(v, field, EstadoComprobante);
+export const opcionTransferenciaParam = (v: unknown, field = 'opcionTransferencia') =>
+  enumParam(v, field, OpcionTransferencia);
+export const tipoCancelacionParam = (v: unknown, field = 'tipoCancelacion') => enumParam(v, field, TipoCancelacion);
+
+/** `SiNoSimpleType`. */
+export function siNoParam(value: unknown, field: string): 'S' | 'N' {
+  if (typeof value !== 'boolean') invalid(field, 'debe ser boolean', value);
+  return value ? 'S' : 'N';
+}
+
+/** `CBUSimpleType` (22 dígitos, con dígitos verificadores). */
+export function cbuParam(value: unknown, field: string): string {
+  if (typeof value !== 'string') invalid(field, 'es requerido (string de 22 dígitos)', value);
+  return rethrowAs(field, value, () => validateCBU(value));
+}
+
+function arrayParam<T>(value: unknown, field: string, required: boolean): T[] | undefined {
+  if (value === undefined && !required) return undefined;
+  if (!Array.isArray(value) || value.length === 0) invalid(field, 'debe ser un array con al menos un elemento', value);
+  return value as T[];
+}
+
+// ---------------------------------------------------------------------------
+// Tipos compuestos
+// ---------------------------------------------------------------------------
+
+/** `IdComprobanteType`. */
+export function idComprobanteParam(value: IdComprobanteInput | undefined, field: string): Xml {
+  if (!value || typeof value !== 'object') invalid(field, 'es requerido', value);
+  return {
+    CUITEmisor: cuitParam(value.cuitEmisor, `${field}.cuitEmisor`),
+    codTipoCmp: codeParam(value.codTipoCmp, `${field}.codTipoCmp`),
+    ptoVta: intParam(value.ptoVta, `${field}.ptoVta`, 1, 99999),
+    nroCmp: intParam(value.nroCmp, `${field}.nroCmp`, 1, 99999999),
+  };
+}
+
+/** `IdCtaCteType` (choice `codCtaCte` | `idFactura`). */
+export function idCtaCteParam(value: IdCtaCteInput | undefined, field = 'idCtaCte'): Xml {
+  if (!value || typeof value !== 'object') invalid(field, 'es requerido ({ codCtaCte } o { idFactura })', value);
+  const hasCod = value.codCtaCte !== undefined;
+  const hasFactura = value.idFactura !== undefined;
+  if (hasCod === hasFactura) invalid(field, 'debe tener exactamente uno de codCtaCte o idFactura', value);
+  return hasCod
+    ? { codCtaCte: longParam(value.codCtaCte, `${field}.codCtaCte`) }
+    : { idFactura: idComprobanteParam(value.idFactura, `${field}.idFactura`) };
+}
+
+/** `FiltroFechaType`. */
+export function fechaParam(value: FiltroFecha | undefined, field = 'fecha'): Xml {
+  if (!value || typeof value !== 'object') invalid(field, 'es requerido ({ tipo, desde, hasta })', value);
+  const tipo = enumParam(value.tipo, `${field}.tipo`, TipoFechaFiltro);
+  const desde = dateParam(value.desde, `${field}.desde`);
+  const hasta = dateParam(value.hasta, `${field}.hasta`);
+  if (desde > hasta) invalid(`${field}.hasta`, 'debe ser igual o posterior a desde', value);
+  return { tipo, desde, hasta };
+}
+
+/** `ArrayMotivosRechazoType`. */
+export function motivosRechazoParam(value: MotivoRechazo[] | undefined, field = 'motivos'): Xml {
+  const motivos = arrayParam<MotivoRechazo>(value, field, true)!;
+  return {
+    motivoRechazo: motivos.map((m, i) => ({
+      codMotivo: codeParam(m?.codMotivo, `${field}[${i}].codMotivo`),
+      descMotivo: textParam(m?.descMotivo, `${field}[${i}].descMotivo`, 3, 250),
+      justificacion: textParam(m?.justificacion, `${field}[${i}].justificacion`, 3, 250),
+    })),
+  };
+}
+
+/** `ArrayCodigosDescripcionesType` para formas de cancelación. */
+export function formasCancelacionParam(
+  value: FormaCancelacionInput[] | undefined,
+  field = 'formasCancelacion',
+  required = true,
+): Xml | undefined {
+  const formas = arrayParam<FormaCancelacionInput>(value, field, required);
+  if (!formas) return undefined;
+  return {
+    codigoDescripcion: formas.map((f, i) => ({
+      codigo: codeParam(f?.codigo, `${field}[${i}].codigo`),
+      descripcion: nonEmptyParam(f?.descripcion, `${field}[${i}].descripcion`),
+    })),
+  };
+}
+
+/** `ArrayConfirmarNotasType`. */
+export function confirmarNotasParam(value: ConfirmarNotaDCInput[] | undefined, field = 'confirmarNotasDC'): Xml | undefined {
+  const notas = arrayParam<ConfirmarNotaDCInput>(value, field, false);
+  if (!notas) return undefined;
+  return {
+    confirmarNota: notas.map((n, i) => ({
+      acepta: siNoParam(n?.acepta, `${field}[${i}].acepta`),
+      idNota: idComprobanteParam(n?.idNota, `${field}[${i}].idNota`),
+    })),
+  };
+}
+
+/** `ArrayRetencionesType`. */
+export function retencionesParam(value: RetencionInput[] | undefined, field = 'retenciones'): Xml | undefined {
+  const rets = arrayParam<RetencionInput>(value, field, false);
+  if (!rets) return undefined;
+  return {
+    retencion: rets.map((r, i) => {
+      const out: Xml = {
+        codTipo: codeParam(r?.codTipo, `${field}[${i}].codTipo`),
+        importe: importeParam(r?.importe, `${field}[${i}].importe`),
+        porcentaje: porcentajeParam(r?.porcentaje, `${field}[${i}].porcentaje`),
+      };
+      if (r.descMotivo !== undefined) out.descMotivo = textParam(r.descMotivo, `${field}[${i}].descMotivo`, 3, 250);
+      return out;
+    }),
+  };
+}
+
+/** `ArrayAjustesOperacionType`. */
+export function ajustesParam(value: AjusteOperacion[] | undefined, field = 'ajustesOperacion'): Xml | undefined {
+  const ajustes = arrayParam<AjusteOperacion>(value, field, false);
+  if (!ajustes) return undefined;
+  return {
+    ajuste: ajustes.map((a, i) => ({
+      codigo: codeParam(a?.codigo, `${field}[${i}].codigo`),
+      importe: importeParam(a?.importe, `${field}[${i}].importe`, true),
+    })),
+  };
+}
+
+/** `CuentaEnAgenteType`. */
+export function ctaAgenteParam(value: CuentaEnAgenteInput | undefined, field = 'ctaAgente'): Xml {
+  if (!value || typeof value !== 'object') invalid(field, 'es requerido', value);
+  const out: Xml = { cuitAgente: cuitParam(value.cuitAgente, `${field}.cuitAgente`) };
+  if (value.razonSocialAgente !== undefined) {
+    out.razonSocialAgente = nonEmptyParam(value.razonSocialAgente, `${field}.razonSocialAgente`);
+  }
+  out.idCuenta = textParam(value.idCuenta, `${field}.idCuenta`, 3, 20);
+  if (value.denominacion !== undefined) out.denominacion = textParam(value.denominacion, `${field}.denominacion`, 3, 250);
+  return out;
+}
+
+/** Código de moneda (`xsd:string`; ej: `PES`, `DOL`). */
+export function monedaParam(value: unknown, field = 'codMoneda'): string {
+  return nonEmptyParam(value, field);
 }

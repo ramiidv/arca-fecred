@@ -1,11 +1,10 @@
 /**
- * Ejemplo: Manejo de errores
+ * Ejemplo: manejo de errores
  *
- * El SDK provee clases de error especificas para catch granular:
- *   - ArcaAuthError: falla de autenticacion WSAA
- *   - ArcaServiceError: error de negocio de ARCA (con codigos)
- *   - ArcaSoapError: error HTTP/SOAP (timeout, servidor caido)
- *   - ArcaValidationError: datos de entrada invalidos
+ *   - ArcaValidationError: datos de entrada inválidos (no se llega a llamar a ARCA)
+ *   - ArcaAuthError / ArcaTicketVigenteError: falla de autenticación WSAA
+ *   - ArcaServiceError: ARCA rechazó la operación (arrayErrores, arrayErroresFormato o resultado R)
+ *   - ArcaSoapError: HTTP, timeout o SOAP Fault. `uncertain` indica si ARCA pudo haberla procesado.
  */
 
 import fs from "fs";
@@ -14,49 +13,44 @@ import {
   ArcaAuthError,
   ArcaServiceError,
   ArcaSoapError,
+  ArcaTicketVigenteError,
+  ArcaValidationError,
 } from "@ramiidv/arca-fecred";
-import { ArcaValidationError } from "@ramiidv/arca-common";
 
 async function main() {
   const fecred = new ArcaFecred({
     cert: fs.readFileSync("./certs/certificado.crt", "utf-8"),
     key: fs.readFileSync("./certs/clave.key", "utf-8"),
-    cuit: "20123456789",
+    cuit: "20123456786",
     production: false,
-    timeout: 60_000, // 60s para servidores lentos
+    timeout: 60_000,
   });
 
   try {
-    // Consultar obligacion de una CUIT
-    const resultado = await fecred.consultarMontoObligadoRecepcion("30712345678");
-    console.log(`Obligado: ${resultado.obligado}`);
-
-    // Consultar cuentas corrientes
-    const cuentas = await fecred.consultarCtasCtes({
-      rol: "Receptor",
-      fechaDesde: "2026-01-01",
-      fechaHasta: "2026-03-31",
+    await fecred.aceptarFECred({
+      idCtaCte: { codCtaCte: "1234567890" },
+      saldoAceptado: 121000,
+      codMoneda: "PES",
+      cotizacionMonedaUlt: 1,
     });
-    console.log(`Cuentas encontradas: ${cuentas.length}`);
   } catch (e) {
     if (e instanceof ArcaValidationError) {
-      // Datos de entrada invalidos (CUIT mal formada, fechas invalidas, etc.)
-      console.error("Error de validacion:", e.message);
-      for (const detail of e.details) {
-        console.error(`  Campo: ${detail.field} - ${detail.message}`);
-      }
+      for (const d of e.details) console.error(`Campo ${d.field}: ${d.message}`);
+    } else if (e instanceof ArcaTicketVigenteError) {
+      console.error("Hay un TA vigente que no está en el ticketStorage:", e.message);
     } else if (e instanceof ArcaAuthError) {
-      // Certificado invalido, expirado, o respuesta WSAA inesperada
-      console.error("Error de autenticacion:", e.message);
-      fecred.clearAuthCache();
+      console.error("Error de autenticación:", e.message);
+      await fecred.clearAuthCache();
     } else if (e instanceof ArcaServiceError) {
-      // Error de negocio con codigos de ARCA
-      for (const err of e.errors) {
-        console.error(`ARCA [${err.code}]: ${err.msg}`);
-      }
+      for (const err of e.errors) console.error(`ARCA [${err.rawCode ?? err.code}]: ${err.msg}`);
     } else if (e instanceof ArcaSoapError) {
-      // Timeout, HTTP 500, SOAP Fault
-      console.error("Error de conexion:", e.message);
+      if (e.uncertain) {
+        // No se sabe si ARCA aceptó la FCE: consultar el estado antes de reintentar.
+        const { ctaCte } = await fecred.consultarCtaCte({ codCtaCte: "1234567890" });
+        console.error("Resultado incierto. Estado actual:", ctaCte.estadoCtaCte.estado);
+      } else {
+        console.error("Error de conexión (no procesado):", e.message);
+      }
     } else {
       throw e;
     }
